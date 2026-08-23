@@ -38,6 +38,9 @@ An agent is either working or idle. ompa gives it good behavior in both:
 2. **Sitter mode** (idle) — a resident caretaker. Watches full system state
    (load, mem, swap, cgroups, journald) and reacts to anomalies *before* you
    feel them: renice the runaway, kill the orphan, throttle the thrash, clear
+   caches, notify you. Suspect processes are **suspended first** (SIGSTOP or
+   cgroup freezer), inspected via /proc/<pid>, then resumed, killed, or
+   quarantined.
    caches, notify you.
 
 Why this matters economically: efficiency is a **throughput multiplier**, not a
@@ -99,6 +102,23 @@ therefore governs BOTH: what the agent runs, and how the harness renders it.
 
 Every rejected feature above has a competitor that already does it better.
 ompa wins by refusing to compete there.
+
+
+
+## Distribution principle
+
+**Thin enough to ship as a distro default.** The moat is being the layer a
+distro can include by default — not an opt-in heavyweight. Guest + sitter
+host-health is the thin core. Everything else is an opt-in plugin.
+
+## Explicitly NOT the core (heavy, opt-in)
+
+- Full EDR: malware / zero-day detection is CrowdStrike/SentinelOne/Microsoft
+  Defender territory — kernel drivers, false-positive triage, regulation.
+- Automated bug-bounty submission with payments: authorization, liability, and
+  bounty ToS make this a legal minefield, not a thin feature.
+- These may become a later opt-in *security-sentinel plugin*, never the default.
+  The moment ompa tries to be EDR, it stops being distro-default-thin.
 
 ## Milestones
 
