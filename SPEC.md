@@ -27,6 +27,29 @@ harnesses). Four pillars:
 
 
 
+
+
+## Two Modes (the core product insight)
+
+An agent is either working or idle. ompa gives it good behavior in both:
+
+1. **Guest mode** (working on your task) — the Houseguest Rules. Throttle, hold,
+   clean up after itself.
+2. **Sitter mode** (idle) — a resident caretaker. Watches full system state
+   (load, mem, swap, cgroups, journald) and reacts to anomalies *before* you
+   feel them: renice the runaway, kill the orphan, throttle the thrash, clear
+   caches, notify you.
+
+Why this matters economically: efficiency is a **throughput multiplier**, not a
+sacrifice. A polite session uses a fraction of the machine, so the same box
+runs more concurrent agents. Frameworks optimize per-session throughput, which
+turns the machine into a tragedy of the commons. ompa optimizes per-machine
+throughput — more agents per dollar of hardware.
+
+The absurdity that motivates this: an agent *can* already sit idle watching the
+full system state and act the instant a slowdown appears — the capability is
+innate — yet no common tool does it. ompa makes the obvious thing exist.
+
 ## The Houseguest Rules (the real spec)
 
 An agent on your machine is a guest in your house. These are non-negotiable:
