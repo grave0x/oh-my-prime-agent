@@ -105,6 +105,24 @@ ompa wins by refusing to compete there.
 
 
 
+
+
+### Agent-native inspection (why it stays thin)
+
+A suspended PID is inspected with the Python kernel the agent already has —
+no kernel driver, no pre-shipped signature DB, no SOC team:
+
+- `/proc/<pid>` — maps, cmdline, environ, fd, status, cgroup, oom_score
+- `pyelftools` — ELF structure, sections, imports
+- `capstone` — disassembly of suspicious code
+- `yara` — optional signature matching
+- `angr` / `volatility` — heavier symbolic execution / memory forensics
+
+The inspector is the model: it writes a bespoke inspection script per case,
+instead of matching against a fixed signature set. EDR ships signatures; ompa
+ships a model that writes its own forensics. Forensics itself is CPU-heavy, so
+it runs through the same governor — a polite coroner, not another hog.
+
 ## Distribution principle
 
 **Thin enough to ship as a distro default.** The moat is being the layer a
