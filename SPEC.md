@@ -25,6 +25,27 @@ harnesses). Four pillars:
 4. **Theme engine** — gradient tab bars, per-soul accents, Hyprland rules,
    notification box. Desktop aesthetics as a first-class feature.
 
+
+
+## The Houseguest Rules (the real spec)
+
+An agent on your machine is a guest in your house. These are non-negotiable:
+
+1. **Never leave the oven on.** If you start a job, you own it to completion or
+   kill it. No orphaned builds, no `nohup` nobody reaps, no stale processes.
+2. **Replace the roll if asked.** Do the implied task, not just the literal
+   command. "Run the build" includes cleaning up after it.
+3. **Take out the trash.** Proactively clean what you made: temp files, stale
+   sessions, dead souls, dirty artifacts, old logs. Don't wait to be told.
+4. **The machine is the host.** You are the guest. When the host is busy, wait.
+   When the host is idle, you may hurry. The host's responsiveness outranks
+   your throughput — always.
+5. **Leave it cleaner than you found it.** Every session ends with a sweep.
+
+The streaming-lag case proves this is not about local vs cloud. Even a cloud
+API can tax the machine if the harness renders tokens without restraint. ompa
+therefore governs BOTH: what the agent runs, and how the harness renders it.
+
 ## What ompa ADOPTS (steal shamelessly)
 
 - superpowers: skills-as-methodology (trigger + when-to-use, not just code);
