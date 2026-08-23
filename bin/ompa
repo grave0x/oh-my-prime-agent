@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# ompa — oh-my-prime-agent CLI (alias form; repo: ~/.prime/oh-my-prime-agent)
+set -euo pipefail
+
+ROOT="${OMPA_ROOT:-$HOME/.prime/oh-my-prime-agent}"
+EXT_DIR="$HOME/.prime/agent/extensions"
+CONF="$ROOT/ompr.toml"
+
+say() { printf '\033[38;2;252;238;10m[ompa]\033[0m %s\n' "$*"; }
+err() { printf '\033[38;2;255;42;109m[ompa]\033[0m %s\n' "$*" >&2; }
+
+# tiny toml get: ompa-toml-get section key [file]
+toml_get() {
+  local sec="$1" key="$2" file="$3" in_sec=0
+  while IFS= read -r line; do
+    [[ "$line" =~ ^[[:space:]]*\[(.*)\][[:space:]]*$ ]] && { [[ "${BASH_REMATCH[1]}" == "$sec" ]] && in_sec=1 || in_sec=0; continue; }
+    [[ $in_sec == 1 && "$line" =~ ^[[:space:]]*$key[[:space:]]*=[[:space:]]*(.*)$ ]] && { echo "${BASH_REMATCH[1]}"; return 0; }
+  done < "$file"
+  return 1
+}
+
+list_plugins() { ls -1 "$ROOT/plugins"; }
+
+link_plugin() {
+  local p="$1"
+  [[ -d "$ROOT/plugins/$p" ]] || { err "unknown plugin: $p"; return 1; }
+  local n=0
+  for f in "$ROOT/plugins/$p"/*.ts; do
+    [[ -f "$f" ]] || continue
+    ln -sf "$f" "$EXT_DIR/$(basename "$f")"
+    n=$((n+1))
+  done
+  say "enabled $p ($n extension file(s))"
+}
+
+unlink_plugin() {
+  local p="$1"
+  local n=0
+  for f in "$ROOT/plugins/$p"/*.ts; do
+    [[ -f "$f" ]] || continue
+    rm -f "$EXT_DIR/$(basename "$f")"
+    n=$((n+1))
+  done
+  say "disabled $p"
+}
+
+cmd_install() {
+  mkdir -p "$EXT_DIR"
+  local enabled
+  enabled=$(toml_get plugins enabled "$CONF" | tr -d '[]" ')
+  IFS=, read -ra PLUGS <<< "$enabled"
+  for p in "${PLUGS[@]}"; do link_plugin "$p"; done
+  # shell alias suggestion
+  if ! grep -q 'alias ompa=' "$HOME/.bashrc" 2>/dev/null; then
+    say 'add to your shell: alias ompa='"'"'$HOME/.prime/oh-my-prime-agent/bin/ompa'"'"''
+  fi
+  say "done. /reload in the TUI to activate."
+}
+
+cmd_enable()  { link_plugin "$1"; }
+cmd_disable() { unlink_plugin "$1"; }
+
+cmd_theme() {
+  local t="${1:-}"
+  [[ -z "$t" ]] && { err "usage: ompa theme <name>"; exit 1; }
+  [[ -d "$ROOT/themes/$t" ]] || { err "no theme: $t"; exit 1; }
+  if [[ -f "$ROOT/themes/$t/kitty-tab-bar.py" ]]; then
+    cp "$ROOT/themes/$t/kitty-tab-bar.py" "$HOME/.config/kitty/tab_bar.py"
+  fi
+  say "theme $t applied (kitty tab bar). Restart kitty to see it."
+}
+
+cmd_status() {
+  echo "repo:  $ROOT"
+  echo "theme: $(toml_get theme name "$CONF")"
+  echo "plugins:"
+  for p in $(list_plugins); do
+    local st="off"
+    for f in "$ROOT/plugins/$p"/*.ts; do
+      [[ -L "$EXT_DIR/$(basename "$f")" ]] && st="on"
+    done
+    printf '  %-16s %s\n' "$p" "$st"
+  done
+  echo "souls:"
+  ls -1 "$HOME/.prime/agent/souls"/*.soul.md 2>/dev/null | sed 's/.*\///' | sed 's/^/  /' || true
+}
+
+cmd_help() {
+  cat <<EOF
+ompa — oh-my-prime-agent (alias form)
+
+  ompa install          link enabled plugins into Prime extensions
+  ompa enable <p>       enable one plugin
+  ompa disable <p>      disable one plugin
+  ompa theme <name>     apply a theme (cp2077 | rebecca)
+  ompa status           show state
+  ompa help
+
+Config: $CONF
+EOF
+}
+
+case "${1:-help}" in
+  install) cmd_install ;;
+  enable) cmd_enable "${2:-}" ;;
+  disable) cmd_disable "${2:-}" ;;
+  theme) cmd_theme "${2:-}" ;;
+  status) cmd_status ;;
+  help|--help|-h) cmd_help ;;
+  *) cmd_help ;;
+esac

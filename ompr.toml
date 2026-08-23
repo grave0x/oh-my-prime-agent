@@ -1,0 +1,20 @@
+# oh-my-prime-agent config (alias: ompa)
+[resource]
+maxLoad1 = 9           # 75% of 12 cores
+minMemAvailMB = 1200
+maxSwapUsedMB = 8000
+pollMs = 1500
+maxHoldMs = 240000
+maxJobs = 4
+niceLevel = 19
+ioClass = 3
+
+[plugins]
+enabled = ["resource-guard", "global-chat", "notif-box", "bash-first"]
+
+[theme]
+name = "cp2077"
+
+[souls]
+dir = "~/.prime/agent/souls"
+reserved = ["grave"]
