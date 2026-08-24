@@ -27,6 +27,13 @@ The north star, in order of ambition:
    specialty, personality, project familiarity) — so an agent knows who it is
    and what it knows, instead of being an anonymous session.
 
+6. **The personal immune system (Far Horizon).** If ompa ships distro-default,
+   the resident becomes the machine's immune system: detect novel malware and
+   undisclosed zero-days in the wild — not just signature matches — and
+   auto-submit findings to bounties. The machine earns while it defends
+   itself. Trust, false positives, disclosure ethics, and 24/7 model cost make
+   this the ceiling, not the plan — see SPEC.md §"Far Horizon".
+
 ## Future implementation
 
 ### Near-term (M2) — souls + fabric
@@ -51,12 +58,14 @@ The north star, in order of ambition:
 - Multi-harness targets (Claude Code, Codex) gated behind demand.
 - Distro packaging — thin enough to ship as a default.
 
-### Deferred / opt-in — security sentinel
+### Deferred — the security ceiling (Far Horizon)
 
-- Full EDR / malware detection is explicitly out of core (kernel drivers,
-  false-positive triage, regulation). If it ever ships, it's a separate
-  *security-sentinel* plugin that runs through the governor — never the default.
-  The moment ompa tries to be EDR, it stops being distro-default-thin.
+- Full EDR / malware detection stays out of core (kernel drivers,
+  false-positive triage, regulation). It is the *Far Horizon* — the personal
+  immune system from the aspirations above — reached only through the chain
+  etiquette → efficiency → always-on resident → security, never by making the
+  default heavyweight. If it ever ships, it's a separate *security-sentinel*
+  plugin running through the governor.
 
 ## Tooling
 
