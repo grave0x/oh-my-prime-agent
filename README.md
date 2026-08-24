@@ -5,7 +5,7 @@ system, alias `ompa` (avoids collision with oh-my-posh `omp` / oh-my-pi).
 
 ## Install
 
-    git clone <this-repo> ~/.prime/oh-my-prime-agent
+    git clone https://github.com/grave0x/oh-my-prime-agent ~/.prime/oh-my-prime-agent
     ln -s ~/.prime/oh-my-prime-agent/bin/ompa ~/.local/bin/ompa
     ompa install
 

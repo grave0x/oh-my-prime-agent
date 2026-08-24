@@ -85,6 +85,16 @@ cmd_status() {
   ls -1 "$HOME/.prime/agent/souls"/*.soul.md 2>/dev/null | sed 's/.*\///' | sed 's/^/  /' || true
 }
 
+cmd_version() {
+  local v
+  if v=$(toml_get package version "$CONF" 2>/dev/null); then
+    v=${v//\"/}
+  else
+    v="unknown"
+  fi
+  printf 'ompa v%s\n' "$v"
+}
+
 cmd_help() {
   cat <<EOF
 ompa — oh-my-prime-agent (alias form)
@@ -94,6 +104,7 @@ ompa — oh-my-prime-agent (alias form)
   ompa disable <p>      disable one plugin
   ompa theme <name>     apply a theme (cp2077 | rebecca)
   ompa status           show state
+  ompa version         print version
   ompa help
 
 Config: $CONF
@@ -106,6 +117,7 @@ case "${1:-help}" in
   disable) cmd_disable "${2:-}" ;;
   theme) cmd_theme "${2:-}" ;;
   status) cmd_status ;;
+  version|--version|-V) cmd_version ;;
   help|--help|-h) cmd_help ;;
   *) cmd_help ;;
 esac
