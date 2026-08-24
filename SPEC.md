@@ -37,8 +37,9 @@ An agent is either working or idle. ompa gives it good behavior in both:
    clean up after itself.
 2. **Sitter mode** (idle) — a resident caretaker. Watches full system state
    (load, mem, swap, cgroups, journald) and reacts to anomalies *before* you
-   feel them: renice the runaway, kill the orphan, throttle the thrash, clear
-   caches, notify you. Suspect processes are **suspended first** (SIGSTOP or
+   feel them: notify → throttle → renice → kill → suspend → hibernate
+   (escalation ladder). Hibernate when idle + no jobs + (low battery |
+   sustained thermal/swap pressure); checkpoint jobs first. Suspect processes are **suspended first** (SIGSTOP or
    cgroup freezer), inspected via /proc/<pid>, then resumed, killed, or
    quarantined.
    caches, notify you.
@@ -161,3 +162,28 @@ host-health is the thin core. Everything else is an opt-in plugin.
 3. Bash for shell work; Python for logic.
 4. Identity over anonymity (souls, not sessions).
 5. Cut anything that a competitor already does better.
+
+
+## Far Horizon (the ceiling — not M2/M3, but the reason the foundation matters)
+
+If ompa is thin enough to ship by default in a distro image, the resident
+becomes a **personal immune system**:
+
+- Watch full system state for anomalies (process, network, file, memory).
+- Detect novel malware and undisclosed zero-days in the wild — not just
+  signature matches.
+- Automatically submit findings to vendor/community bounties, with payment
+  wired to the machine's own bank.
+
+The machine earns while it defends itself.
+
+Hard problems — why this is horizon, not now:
+- **Trust.** The sitter is the highest-value process on the box. It must
+  defend itself (integrity, attestation) or malware targets it first.
+- **False positives.** Junk submissions burn bounty reputation fast.
+- **Disclosure ethics.** Finding vs. selling zero-days is a legal line.
+- **Cost.** A capable model running 24/7 is only viable because the
+  houseguest rules free the headroom.
+
+The chain: etiquette → efficiency → always-on resident → security.
+Each layer works only because the one below it is thin.
