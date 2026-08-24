@@ -149,11 +149,25 @@ host-health is the thin core. Everything else is an opt-in plugin.
   Code, Codex) gated behind demand.
 - M5: public release (OSS) — decide A/B/C at M3, not now.
 
+## Direction: PRODUCT (decided)
+
+ompa is a product direction — not a personal dotfiles bundle, not just OSS.
+Personal use is the dogfood (we run it on grave's machine every day); OSS is
+the distribution channel; the product is the paid layer.
+
+Revenue shape (to be refined at M3, not blocking):
+- Free: core ergonomics layer (guest rules, throttle/hold, bash-first, themes).
+- Paid: the sitter — always-on resident caretaker, telemetry history, and
+  (far horizon) the security/immune-system layer.
+- Distro-default thinness is the wedge: if a base image ships ompa, the
+  paid sitter is the natural upgrade. "More agents per dollar of hardware"
+  is the buyer's argument.
+
 ## Decisions deferred (deliberately)
 
-- Personal vs OSS vs product (A/B/C): decide at M3 with a working M2.
 - Multi-harness support: Prime-first until the ergonomics layer is proven.
 - Memory backend (mem0 vs mempalace vs own): evaluate in M2 against souls.
+- Exact pricing/packaging: at M3 with a working M2.
 
 ## Principles
 
