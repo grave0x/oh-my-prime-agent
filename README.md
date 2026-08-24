@@ -37,3 +37,7 @@ CLI-first agents optimize for headless boxes. On a desktop the same agent
 behaviour freezes your keyboard. This bundle makes Prime desktop-aware:
 resource budgets + hold/throttle, bash-first tool choice, agent identity
 (souls), and cross-agent chat routed through the same agent-message channel.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
