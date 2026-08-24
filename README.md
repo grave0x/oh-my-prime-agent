@@ -38,6 +38,10 @@ behaviour freezes your keyboard. This bundle makes Prime desktop-aware:
 resource budgets + hold/throttle, bash-first tool choice, agent identity
 (souls), and cross-agent chat routed through the same agent-message channel.
 
+## Roadmap
+
+Future implementation, tooling, and aspirations: [ROADMAP.md](ROADMAP.md).
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
