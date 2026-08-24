@@ -517,16 +517,16 @@ export default function globalChatExtension(pi: ExtensionAPI): void {
   });
 
   // ---- inject my soul into the system prompt so I act per my identity ---
-  pi.on("context", async (event: any, ctx: ExtensionContext) => {
+  pi.on("before_agent_start", async (event: any, ctx: ExtensionContext) => {
     try {
       const sid = ctx.sessionManager?.getSessionId?.() ?? "";
-      if (!sid) return;
+      if (!sid) return undefined;
       const souls = readSouls();
       let mine: SoulMeta | undefined;
       for (const meta of Object.values(souls)) {
         if (meta.session === sid || meta.sessionId === sid) { mine = meta; break; }
       }
-      if (!mine) return;
+      if (!mine) return undefined;
       const parts = [`Your soul name is ${mine.name}.`];
       if (mine.role) parts.push(`Role: ${mine.role}.`);
       if (mine.specialty) parts.push(`Specialty: ${mine.specialty}.`);
@@ -539,13 +539,9 @@ export default function globalChatExtension(pi: ExtensionAPI): void {
       }
       parts.push("Answer in character but stay practical. Others reach you as `:" + mine.name + ":` in global chat.");
       const soulBlock = "[Soul identity]\n" + parts.join("\n");
-      // prepend a system message so the model sees it every turn
-      const msgs = event.messages || [];
-      const already = msgs.some((m: any) => m.role === "system" && typeof m.content === "string" && m.content.includes("[Soul identity]"));
-      if (!already && Array.isArray(msgs)) {
-        msgs.unshift({ role: "system", content: soulBlock });
-      }
-      return { messages: msgs };
+      const base = (event.systemPrompt || "").trim();
+      const already = base.includes("[Soul identity]");
+      return { systemPrompt: already ? base : base + "\n\n" + soulBlock };
     } catch { return undefined; }
   });
 

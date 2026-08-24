@@ -13,7 +13,7 @@ niceLevel = 19
 ioClass = 3
 
 [plugins]
-enabled = ["resource-guard", "global-chat", "notif-box", "bash-first"]
+enabled = ["resource-guard", "global-chat", "souls", "notif-box", "bash-first"]
 
 [theme]
 name = "cp2077"

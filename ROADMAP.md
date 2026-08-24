@@ -3,6 +3,9 @@
 > Companion to [SPEC.md](SPEC.md). SPEC says *what* ompa is and *why*; this
 > says *where it's going* and *how it gets built*. `v0.1.0` (M1) shipped the
 > framework, CLI, plugins, and themes — this is the path from here.
+> **Release state:** the repo is public now (`v0.1.0`, this session). SPEC.md's
+> "public release (OSS)" milestone — M5, gated on the A/B/C decision at M3 — is
+> the *formal* launch, still deferred.
 
 ## Aspirational goals
 
