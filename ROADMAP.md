@@ -3,9 +3,9 @@
 > Companion to [SPEC.md](SPEC.md). SPEC says *what* ompa is and *why*; this
 > says *where it's going* and *how it gets built*. `v0.1.0` (M1) shipped the
 > framework, CLI, plugins, and themes — this is the path from here.
-> **Release state:** the repo is public now (`v0.1.0`, this session). SPEC.md's
-> "public release (OSS)" milestone — M5, gated on the A/B/C decision at M3 — is
-> the *formal* launch, still deferred.
+> **Release state:** the repo is public now (`v0.1.0`, this session). Direction
+> is decided — **product** (free core, paid sitter, distro-default wedge; see
+> SPEC.md §Direction). The formal OSS launch (M5) is still ahead.
 
 ## Aspirational goals
 
@@ -53,7 +53,7 @@ The north star, in order of ambition:
   prediction.
 - **Theme engine** gets live previews, per-soul accents, Hyprland rules, and
   the notification box as a first-class panel.
-- **Decide A/B/C** (personal vs OSS vs product) here, with a working M2.
+- **Refine revenue/packaging** — direction is decided (product; see SPEC.md §Direction). Exact pricing and packaging land with a working M2.
 
 ### Longer-term (M4–M5) — distribution
 
