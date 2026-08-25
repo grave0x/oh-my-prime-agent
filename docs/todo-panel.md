@@ -97,6 +97,73 @@ TODO  (Σ 0/11)
 - Lines truncated to panel width (`truncateToWidth`, existing helper); no
   horizontal scroll.
 
+## Modes
+
+The panel has three presentation modes over the same `todo.json` (modes are
+presentation + small state, never a second data model). The header line
+shows the active mode: `TODO · mode:tree (Σ 0/11)`.
+
+| Mode | One-liner | For |
+|---|---|---|
+| `tree` | omp-parity list (§Rendering) | working through items, edit-by-edit |
+| `graph` | Graph monitor — pipeline + progress history | watching the drive move at a glance |
+| `goal` | Progressive goal — one unlocked goal at a time | focused execution, gate discipline |
+
+### mode:graph — Graph monitor
+
+Target render:
+
+```
+TODO · mode:graph (Σ 3/11 · 27%)
+ I. Discovery   ✓ 3/3 ▓▓▓▓▓▓▓▓  ▶ next: —
+ II. Import-Omp ▶ 0/2 ░░░░░░░░   (active stage)
+ III. Import-Prime  0/2 ░░░░░░░░
+ IV. Import-Pi      0/2 ░░░░░░░░
+ V. Verification    0/2 ░░░░░░░░
+ burn-up: ▁▁▁▂▂▃▃▅▅▅▆ (+2 since last check)
+```
+
+- **Pipeline graph**: the sections are the nodes of a linear pipeline in
+  flow order (`I → II → III → IV → V`); each node shows `x/y` + a 8-char
+  progress bar (`▓▓▓░░░░░ 2/3`), the stage containing the active pointer
+  (`in_progress` item) is highlighted `▶`, completed stages `✓`.
+- **History sparkline**: every refresh appends a `done/total` snapshot to a
+  rolling buffer (capped, e.g. 60 points) persisted in `todo.json`
+  (`_history`) so progress is visible across reloads and sessions; rendered
+  as a burn-up sparkline (`▁▂▃▄▅▆▇█`) under the pipeline with min/max and
+  last-change delta (`+2 since last check`).
+- Monitor-only by intent: no item mutation in this mode (mutation stays on
+  `tree` / commands / agent).
+
+### mode:goal — Progressive goal
+
+Target render:
+
+```
+TODO · mode:goal (goal 2/5)
+ ✓ I. Discovery       3/3  (gate passed)
+ ▶ II. Import-Omp     ACTIVE · 0/2
+    next: map discovered keys onto omp schema
+ 🔒 III. Import-Prime  locked until II completes
+ 🔒 IV. Import-Pi      locked until III completes
+ 🔒 V. Verification    locked until IV completes
+```
+
+- Each section is a **goal**; a goal's **gate** is all its items
+  `completed` (blocked items stall the goal, shown `⛔`). Goals unlock in
+  order: `✓ done` · `▶ ACTIVE (x/y)` · `🔒 locked`.
+- Only the first incomplete goal is armed: `next`/`done`/`block`/`reopen`
+  apply to the active goal's items; locked goals reject mutations with a
+  `goal I-2: locked until I-1 (Discovery) completes` message. Completing
+  the last item of a goal auto-advances the active goal to the next.
+- Renders a **next action** line (first pending item of the active goal) so
+  the drive always has exactly one suggested next step.
+- Agent contract in this mode: work only the active goal; never touch
+  locked goals; after each step re-check the gate.
+
+Mode switching: `/todo mode <tree|graph|goal>` (persists), or `m` key in
+interactive mode to cycle; `[todo] mode` sets the default.
+
 ## Behavior
 
 ### Panel
@@ -117,17 +184,23 @@ TODO  (Σ 0/11)
 - `/todo done <id>` · `/todo next <id>` · `/todo block <id> <reason>` ·
   `/todo reopen <id>` · `/todo reset` (clear all statuses; `--hard` clears
   the list).
+- `/todo mode <tree|graph|goal>` — switch presentation mode (persists;
+  `m` key cycles in interactive mode).
 - `/ompa todo` — alias of `/todo`.
-- Completions for ids (`I-1`, …) and verbs.
+- Completions for ids (`I-1`, …), verbs, and modes.
 
 ### LLM tool — `ompa_todo`
-- Read: full tree + statuses + timestamps (so the agent can orient).
+- Read: full tree + statuses + timestamps (+ mode + history summary in
+  `graph` mode) so the agent can orient.
 - Mutate: `append`, `done`, `next`, `block`, `reopen` with the same
-  semantics and single-pointer enforcement.
+  semantics and single-pointer enforcement; in `goal` mode mutations on
+  locked goals are refused with the gate message.
+- Mode control: `mode` param (`tree|graph|goal`) to switch presentation.
 - **Agent contract** (mirrors omp's prompt rules, injected via the tool
   description + a line in the system prompt): before substantial work,
   compare next action with the todo; after each completed step, update it
-  immediately; never leave a stale `in_progress` while working later phases.
+  immediately; never leave a stale `in_progress` while working later
+  phases; in `goal` mode, work only the active goal.
 
 ## Seed content (first workload)
 
@@ -153,6 +226,7 @@ free-pi / google / groq / hf-dsv4 / mistral / novita / openrouter).
 ```toml
 [todo]
 file = "~/.prime/oh-my-prime-agent/todo.json"   # storage
+mode = "tree"                                    # tree | graph | goal
 interactive = false                              # panel checkbox toggles
 # [tui] panels += "todo"                          # enable the pane
 
@@ -160,7 +234,8 @@ interactive = false                              # panel checkbox toggles
 panels = ["resource", "chat", "notifs", "souls", "fleet", "profile", "todo", "upstream", "help"]
 ```
 
-Env: `OMPA_TODO_INTERACTIVE=1` override for a session.
+Env: `OMPA_TODO_INTERACTIVE=1` override for a session; `OMPA_TODO_MODE`
+override for the default mode.
 
 ## Implementation notes
 
@@ -193,10 +268,20 @@ Env: `OMPA_TODO_INTERACTIVE=1` override for a session.
    (no binary state, no absolute paths).
 7. Interactive mode (opt-in): `space`/`n`/`b`/`a`/`r` work in the pane.
 8. Fresh install with no `todo.json` seeds the I–V workflow.
+9. **graph mode**: pipeline shows `I→…→V` nodes with `x/y` + bars, active
+   stage `▶`; history sparkline accumulates across reloads and shows a
+   `+N` delta after a completion.
+10. **goal mode**: later goals render `🔒`; `next`/`done` on a locked goal
+    is refused with the gate message; completing the last item of a goal
+    auto-advances the active goal.
+11. `/todo mode` and the `m` key persist the mode and rebuild the pane
+    header (`TODO · mode:graph (Σ …)`).
 
 ## Non-goals (refused)
 
 - No DAG / dependencies / due dates / priorities — a flat ordered tree only.
+  The `graph` mode is a **linear pipeline** (sections in flow order), not an
+  arbitrary dependency graph; `goal` gates are linear (unlock in order).
 - No reminders or notifications from todo state (the upstream-drift watcher
   owns notification; todo is a plan surface, not an alarm).
 - No cross-harness live sync — the file is the sync point (both harnesses
@@ -204,3 +289,5 @@ Env: `OMPA_TODO_INTERACTIVE=1` override for a session.
 - No markdown import/export in v1 (`todo.json` is the only format).
 - Not a project manager; one todo list per machine (per
   `[todo] file`), not per project, in v1.
+- No parallel goals in v1: `goal` mode enforces strictly sequential gates;
+  a later mode may add parallel goal tracks if the drive needs it.
