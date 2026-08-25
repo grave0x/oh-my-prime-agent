@@ -41,10 +41,20 @@ guidance = true           # inject backend choice guidance per turn
 enabled = ["resource-guard", "global-chat", "souls", "notif-box", "bash-first", "self-profiler", "ompa-tui", "kernel-pilot"]
 
 [tui]
-panels = ["resource", "chat", "notifs", "souls", "fleet", "profile", "help"]  # dashboard panels, in order
+panels = ["resource", "chat", "notifs", "souls", "fleet", "profile", "upstream", "help"]  # dashboard panels, in order
 refreshMs = 2000          # dashboard panel refresh interval
 statusWidget = true       # compact one-line status above the editor
 statusRefreshMs = 5000    # status widget refresh interval
+
+[upstream]
+# Upstream-drift watcher: checks priv builds vs upstreams, notifies at
+# higher priority and files deduped GitHub issues on lag. Config + state
+# live in ~/.omp/upstream-watch.json (shared with the pi-side omp ext).
+# Env: OMP_WATCH=0|1, OMP_WATCH_INTERVAL_HOURS. Manual run: /ompa upstream.
+enabled = true
+intervalHours = 6
+issueOnLag = true
+githubUser = "grave0x"
 
 [refine]
 primeAccess = true        # /refine may emit audited `prime` edits (gate file mirrors this)

@@ -27,9 +27,10 @@
  * dashboard above the editor: load/mem/swap + chat/notif/soul/profile counts.
  */
 
-import { existsSync, readFileSync, mkdirSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { execFile } from "node:child_process";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Container, Key, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 
@@ -47,7 +48,7 @@ const FLEET_RUNS = join(homedir(), ".local", "state", "fleet", "runs.jsonl");
 const FLEET_QUEUE = join(homedir(), ".local", "state", "fleet", "queue.json");
 const PROFILE_DISTILLED = join(homedir(), ".local", "state", "ompa", "profile-distilled.json");
 
-const DEFAULT_PANELS = ["resource", "chat", "notifs", "souls", "fleet", "profile", "help"];
+const DEFAULT_PANELS = ["resource", "chat", "notifs", "souls", "fleet", "profile", "upstream", "help"];
 const WIDGET_KEY = "ompa-status";
 const PANEL_TITLES: Record<string, string> = {
   resource: "Resource",
@@ -56,6 +57,7 @@ const PANEL_TITLES: Record<string, string> = {
   souls: "Souls",
   fleet: "Fleet",
   profile: "Profile",
+  upstream: "Upstream",
   help: "Help",
 };
 
@@ -122,6 +124,360 @@ function loadTuiConfig(): TuiConfig {
     statusWidget: tomlBool("tui", "statusWidget", DEFAULT_CONFIG.statusWidget),
     statusRefreshMs: tomlInt("tui", "statusRefreshMs", DEFAULT_CONFIG.statusRefreshMs),
   };
+}
+
+/* ======================================================================
+ * UPSTREAM DRIFT WATCHER — "my priv builds vs upstreams"
+ *
+ * Same engine as the pi-side omp.ts port; shared config + state:
+ * ~/.omp/upstream-watch.json. Checks the user's private builds (forks /
+ * pinned installs / omp plugin pins) against upstreams; when a build lags
+ * behind, notifies at higher priority (warning) and — deduped — files a
+ * GitHub issue via the `gh` CLI. Env: OMP_WATCH=0|1,
+ * OMP_WATCH_INTERVAL_HOURS.
+ * ====================================================================== */
+
+const UPSTREAM_WATCH_PATH = join(homedir(), ".omp", "upstream-watch.json");
+
+interface WatchBuild {
+  name: string;
+  kind?: "git" | "npm" | "omp-plugins";
+  local?: string;
+  repo?: string;
+  upstream?: string;
+  branch?: string;
+  npm?: string;
+  installed?: string[];
+}
+
+interface WatchState {
+  lastCheck?: string;
+  builds?: Record<string, { lastUpstream?: string; lastNotified?: string; issueUrl?: string; issueError?: string }>;
+}
+
+interface WatchConfig {
+  enabled: boolean;
+  intervalHours: number;
+  issueOnLag: boolean;
+  githubUser: string;
+  notifyLevel: string;
+  builds: WatchBuild[];
+  _state?: WatchState;
+}
+
+interface Drift {
+  kind: string;
+  name: string;
+  behind: number;
+  detail: string;
+  sample: string[];
+  upstreamRef: string;
+  target: string;
+}
+
+const WATCH_DEFAULTS: WatchConfig = {
+  enabled: true,
+  intervalHours: 6,
+  issueOnLag: true,
+  githubUser: "grave0x",
+  notifyLevel: "warning",
+  builds: [
+    {
+      name: "pi",
+      local: "~/Projects/04-llm/pi-modded",
+      repo: "grave0x/oh-my-prime-agent", // grave0x/pi has issues disabled
+      upstream: "earendil-works/pi",
+      branch: "main",
+      npm: "@earendil-works/pi-coding-agent",
+    },
+    {
+      name: "prime-agent",
+      repo: "grave0x/oh-my-prime-agent",
+      npm: "prime-agent",
+      installed: [
+        "~/.npm-global/lib/node_modules/prime-agent/package.json",
+        "~/.local/lib/node_modules/prime-agent/package.json",
+      ],
+    },
+    { name: "omp", kind: "omp-plugins" },
+  ],
+};
+
+function watchReadJson(p: string): unknown {
+  try {
+    return JSON.parse(readFileSync(p, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function expandHome(p: string): string {
+  return p.startsWith("~/") ? homedir() + p.slice(1) : p;
+}
+
+function loadWatchConfig(): WatchConfig {
+  const cfg: WatchConfig = JSON.parse(JSON.stringify(WATCH_DEFAULTS));
+  const file = (watchReadJson(UPSTREAM_WATCH_PATH) ?? {}) as Record<string, unknown>;
+  if (typeof file.enabled === "boolean") cfg.enabled = file.enabled;
+  if (typeof file.intervalHours === "number") cfg.intervalHours = file.intervalHours;
+  if (typeof file.issueOnLag === "boolean") cfg.issueOnLag = file.issueOnLag;
+  if (typeof file.githubUser === "string") cfg.githubUser = file.githubUser;
+  if (typeof file.notifyLevel === "string") cfg.notifyLevel = file.notifyLevel;
+  if (Array.isArray(file.builds)) cfg.builds = file.builds.filter((b): b is WatchBuild => !!b && typeof (b as any).name === "string");
+  if (file._state && typeof file._state === "object") cfg._state = file._state as WatchState;
+  const env = process.env;
+  if (env.OMP_WATCH === "0" || env.OMP_WATCH === "false") cfg.enabled = false;
+  else if (env.OMP_WATCH === "1" || env.OMP_WATCH === "true") cfg.enabled = true;
+  const ih = Number(env.OMP_WATCH_INTERVAL_HOURS);
+  if (Number.isFinite(ih) && ih > 0) cfg.intervalHours = ih;
+  return cfg;
+}
+
+function saveWatchState(cfg: WatchConfig): void {
+  try {
+    mkdirSync(dirname(UPSTREAM_WATCH_PATH), { recursive: true });
+    writeFileSync(UPSTREAM_WATCH_PATH, JSON.stringify({ ...cfg, _state: cfg._state }, null, 2));
+  } catch {
+    /* best effort */
+  }
+}
+
+function runCmd(cmd: string, args: string[], timeoutMs = 30000): Promise<{ ok: boolean; out: string; err: string }> {
+  return new Promise((resolve) => {
+    execFile(cmd, args, { timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 }, (error, stdout, stderr) => {
+      resolve({ ok: !error, out: String(stdout || "").trim(), err: String(stderr || "").trim() });
+    });
+  });
+}
+
+function upstreamRef(ref: string): string {
+  if (ref.includes("://") || ref.includes("@")) return ref;
+  if (ref.includes("/")) return `https://github.com/${ref}.git`;
+  return ref;
+}
+
+async function checkGitBuild(b: WatchBuild): Promise<Drift | null> {
+  const local = expandHome(b.local || "");
+  const upstream = b.upstream || "";
+  if (!local || !upstream) return null;
+  const branch = b.branch || "main";
+  const f = await runCmd("git", ["-C", local, "fetch", "--quiet", upstreamRef(upstream), branch], 45000);
+  if (!f.ok) return null;
+  const behind = await runCmd("git", ["-C", local, "rev-list", "--count", "HEAD..FETCH_HEAD"], 15000);
+  if (!behind.ok) return null;
+  const n = parseInt(behind.out || "0", 10) || 0;
+  if (n <= 0) return null;
+  const localHead = (await runCmd("git", ["-C", local, "rev-parse", "--short", "HEAD"], 10000)).out || "?";
+  const upHead = (await runCmd("git", ["-C", local, "rev-parse", "--short", "FETCH_HEAD"], 10000)).out || "?";
+  const log = await runCmd("git", ["-C", local, "log", "--oneline", "-n 15", "HEAD..FETCH_HEAD"], 15000);
+  return {
+    kind: "git",
+    name: b.name,
+    behind: n,
+    detail: `${localHead} → ${upHead}`,
+    sample: log.out.split("\n").filter(Boolean).slice(0, 15),
+    upstreamRef: upHead,
+    target: upstream,
+  };
+}
+
+async function installedVersion(b: WatchBuild): Promise<string | null> {
+  for (const p of b.installed || []) {
+    try {
+      const j = JSON.parse(readFileSync(expandHome(p), "utf8"));
+      if (j && typeof j.version === "string") return j.version;
+    } catch {
+      /* try next */
+    }
+  }
+  return null;
+}
+
+async function checkNpmBuild(b: WatchBuild): Promise<Drift | null> {
+  const pkg = b.npm || "";
+  if (!pkg) return null;
+  const latest = await runCmd("npm", ["view", pkg, "version"], 30000);
+  if (!latest.ok) return null;
+  const latestV = latest.out.trim();
+  const installed = await installedVersion(b);
+  if (!installed || installed === latestV) return null;
+  return {
+    kind: "npm",
+    name: b.name,
+    behind: 1,
+    detail: `${installed} → ${latestV}`,
+    sample: [],
+    upstreamRef: latestV,
+    target: `npm:${pkg}`,
+  };
+}
+
+async function checkOmpPlugins(): Promise<Drift | null> {
+  const lockPath = join(homedir(), ".omp", "plugins", "omp-plugins.lock.json");
+  const lock = (await watchReadJson(lockPath)) as { plugins?: Record<string, { version?: string }> } | null;
+  if (!lock?.plugins) return null;
+  const installed = lock.plugins;
+  const cacheRoot = join(homedir(), ".omp", "plugins", "cache", "marketplaces");
+  let dirs: string[] = [];
+  try {
+    dirs = readdirSync(cacheRoot);
+  } catch {
+    return null;
+  }
+  const catalog: Record<string, string> = {};
+  for (const d of dirs) {
+    const mp = (await watchReadJson(join(cacheRoot, d, "marketplace.json"))) as { plugins?: Array<{ name?: string; version?: string }> } | null;
+    for (const p of mp?.plugins ?? []) {
+      if (p?.name && p?.version) catalog[p.name] = p.version;
+    }
+  }
+  const drift: string[] = [];
+  for (const [name, pin] of Object.entries(installed)) {
+    const latest = catalog[name];
+    if (!latest) continue;
+    if (String(pin?.version || "") !== latest) drift.push(`${name} ${pin?.version || "?"} → ${latest}`);
+  }
+  if (!drift.length) return null;
+  return {
+    kind: "omp-plugins",
+    name: "omp",
+    behind: drift.length,
+    detail: `${drift.length} plugin(s) behind marketplace catalog`,
+    sample: drift.slice(0, 15),
+    upstreamRef: drift[0] || "",
+    target: "anthropics plugin marketplaces",
+  };
+}
+
+async function checkBuild(b: WatchBuild): Promise<Drift | null> {
+  if (b.kind === "omp-plugins") return checkOmpPlugins();
+  if (b.local || b.upstream) {
+    const git = await checkGitBuild(b);
+    if (git) return git;
+  }
+  if (b.npm) return checkNpmBuild(b);
+  return null;
+}
+
+async function fileLagIssue(cfg: WatchConfig, b: WatchBuild, d: Drift): Promise<void> {
+  if (!cfg.issueOnLag || !b.repo) return;
+  const builds = (cfg._state || (cfg._state = {})).builds || (cfg._state.builds = {});
+  const st = builds[b.name] || (builds[b.name] = {});
+  if (st.lastUpstream === d.upstreamRef) return;
+  const title = `[upstream-drift] ${b.name} behind ${d.target} (${d.detail})`;
+  const list = await runCmd("gh", ["issue", "list", "-R", b.repo, "--state", "open", "--search", `\"upstream-drift ${b.name}\" in:title`], 30000);
+  if (list.ok && /upstream-drift/i.test(list.out) && /\d+/.test(list.out)) {
+    st.lastUpstream = d.upstreamRef;
+    saveWatchState(cfg);
+    return;
+  }
+  const body = [
+    `**Build:** ${b.name}`,
+    `**Lag:** ${d.behind} ${d.kind === "npm" ? "version(s)" : "commit(s)"} behind upstream (${d.target})`,
+    "",
+    `**Detail:** ${d.detail}`,
+    d.sample.length ? `\nUpstream changes (top ${d.sample.length}):\n\`\`\`\n${d.sample.join("\n")}\n\`\`\`` : "",
+    "",
+    "Auto-filed by the omp/ompa upstream-drift watcher. Status: `/omp-upstream` (pi) or `/ompa upstream` (prime-agent).",
+  ].join("\n");
+  const create = await runCmd("gh", ["issue", "create", "-R", b.repo, "--title", title, "--body", body], 30000);
+  st.lastUpstream = d.upstreamRef;
+  if (create.ok) {
+    st.issueUrl = create.out.trim() || undefined;
+    delete st.issueError;
+  } else {
+    st.issueError = (create.err || "gh failed").slice(0, 160);
+  }
+  saveWatchState(cfg);
+}
+
+type WatchNotifier = (title: string, body: string, level: string) => void;
+
+async function runUpstreamWatch(notify: WatchNotifier): Promise<{ report: string; lagging: { build: WatchBuild; drift: Drift }[] }> {
+  const cfg = loadWatchConfig();
+  const lagging: { build: WatchBuild; drift: Drift }[] = [];
+  for (const b of cfg.builds) {
+    const drift = await checkBuild(b);
+    if (!drift) continue;
+    lagging.push({ build: b, drift });
+    await fileLagIssue(cfg, b, drift);
+    const builds = (cfg._state || (cfg._state = {})).builds || (cfg._state.builds = {});
+    const st = builds[b.name] || (builds[b.name] = {});
+    if (st.lastNotified !== drift.upstreamRef) {
+      notify(
+        `⚠ upstream lag: ${b.name}`,
+        `${drift.behind} ${drift.kind === "npm" ? "version(s)" : "commit(s)"} behind ${drift.target} · ${drift.detail}`,
+        cfg.notifyLevel,
+      );
+      st.lastNotified = drift.upstreamRef;
+      saveWatchState(cfg);
+    }
+  }
+  cfg._state!.lastCheck = new Date().toISOString();
+  saveWatchState(cfg);
+  return { report: formatWatchReport(cfg, lagging), lagging };
+}
+
+function formatWatchReport(cfg: WatchConfig, lagging: { build: WatchBuild; drift: Drift }[]): string {
+  const lines: string[] = [];
+  lines.push("# OMP upstream drift watch");
+  lines.push("");
+  lines.push(`- enabled: ${cfg.enabled} · interval: ${cfg.intervalHours}h · issues: ${cfg.issueOnLag ? "on" : "off"} (${cfg.githubUser})`);
+  lines.push(`- last check: ${cfg._state?.lastCheck ?? "never"}`);
+  lines.push("");
+  if (!lagging.length) {
+    lines.push("No drift detected — all tracked builds are current.");
+    return lines.join("\n");
+  }
+  lines.push(`## Lagging (${lagging.length})`);
+  for (const { build, drift } of lagging) {
+    lines.push(`- **${build.name}**: ${drift.behind} ${drift.kind === "npm" ? "version(s)" : "commit(s)"} behind ${drift.target} (${drift.detail})`);
+    for (const s of drift.sample.slice(0, 8)) lines.push(`    ${s}`);
+    const st = (cfg._state?.builds || {})[build.name];
+    if (st?.issueUrl) lines.push(`    issue: ${st.issueUrl}`);
+    if (st?.issueError) lines.push(`    issue filing failed: ${st.issueError}`);
+  }
+  lines.push("");
+  lines.push(`Tracked: ${cfg.builds.map((b) => b.name).join(", ")}`);
+  lines.push("Config: ~/.omp/upstream-watch.json (env OMP_WATCH / OMP_WATCH_INTERVAL_HOURS)");
+  return lines.join("\n");
+}
+
+/* ---- scheduler (module state shared across panels/commands/hooks) ---- */
+let watchTimer: ReturnType<typeof setInterval> | null = null;
+let watchRunning = false;
+let lastWatchReport: string = "(upstream watch not run yet — run `/ompa upstream`)";
+let watchCtx: any = null;
+
+async function runUpstreamWatchSafely(notify: WatchNotifier): Promise<void> {
+  if (watchRunning) return;
+  watchRunning = true;
+  try {
+    const r = await runUpstreamWatch(notify);
+    lastWatchReport = r.report;
+  } catch {
+    /* never break the harness */
+  } finally {
+    watchRunning = false;
+  }
+}
+
+function startUpstreamWatch(): void {
+  const cfg = loadWatchConfig();
+  if (!cfg.enabled) return;
+  const intervalMs = Math.max(1, cfg.intervalHours) * 3600 * 1000;
+  const last = cfg._state?.lastCheck ? Date.parse(cfg._state.lastCheck) : 0;
+  const stale = !last || Number.isNaN(last) || Date.now() - last > intervalMs;
+  const notifier: WatchNotifier = (title, body, level) => {
+    try {
+      watchCtx?.ui?.notify?.(`${title} — ${body}`, level);
+    } catch {
+      /* ignore */
+    }
+  };
+  if (stale) void runUpstreamWatchSafely(notifier);
+  if (watchTimer) return;
+  watchTimer = setInterval(() => void runUpstreamWatchSafely(notifier), intervalMs);
 }
 
 /* ------------------------------------------------------------------ */
@@ -339,6 +695,23 @@ function profilePanel(): PanelDef {
   };
 }
 
+function upstreamPanel(): PanelDef {
+  return {
+    id: "upstream",
+    title: PANEL_TITLES.upstream,
+    refresh() {
+      const head = lastWatchReport.split("\n");
+      const body = lastWatchReport.startsWith("# OMP") ? head.slice(2) : head;
+      const lines: string[] = [];
+      for (const line of body.slice(0, 26)) lines.push(sanitizeTerminal(line));
+      if (body.length > 26) lines.push(`… ${body.length - 26} more`);
+      lines.push("");
+      lines.push("`/ompa upstream` to check now · auto-checks every interval (default 6h) · issues filed on lag");
+      return lines;
+    },
+  };
+}
+
 function helpPanel(): PanelDef {
   return {
     id: "help",
@@ -373,6 +746,7 @@ function buildPanels(cfg: TuiConfig): PanelDef[] {
     souls: soulsPanel,
     fleet: fleetPanel,
     profile: profilePanel,
+    upstream: upstreamPanel,
     help: helpPanel,
   };
   const out: PanelDef[] = [];
@@ -531,6 +905,8 @@ export default function ompaTui(pi: ExtensionAPI): void {
   pi.on("session_start", async (_event: any, ctx: ExtensionContext) => {
     const cfg = loadTuiConfig();
     if (ctx.hasUI) setStatusWidget(ctx, cfg);
+    watchCtx = ctx;
+    startUpstreamWatch();
   });
 
   // Tear down cleanly on reload / quit / session switch: no leaked timers.
@@ -546,9 +922,9 @@ export default function ompaTui(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("ompa", {
-    description: "ompa dashboard + widget control. /ompa opens the dashboard; /ompa widget on|off toggles the status widget.",
+    description: "ompa dashboard + widget + upstream-drift control. /ompa opens the dashboard; /ompa widget on|off toggles the status widget; /ompa upstream checks private builds vs upstreams now (notify + file issues on lag).",
     getArgumentCompletions: (prefix: string) => {
-      const args = ["widget on", "widget off"].filter((a) => a.startsWith(prefix.toLowerCase()));
+      const args = ["widget on", "widget off", "upstream"].filter((a) => a.startsWith(prefix.toLowerCase()));
       return args.map((a) => ({ value: a, label: a }));
     },
     handler: async (args: string, ctx: ExtensionCommandContext) => {
@@ -559,6 +935,12 @@ export default function ompaTui(pi: ExtensionAPI): void {
         cfg.statusWidget = on;
         setStatusWidget(ctx, cfg);
         ctx.ui.notify(on ? "status widget on" : "status widget off", "success");
+        return;
+      }
+      if (arg === "upstream") {
+        const notify: WatchNotifier = (title, body, level) => ctx.ui.notify(`${title} — ${body}`, level);
+        await runUpstreamWatchSafely(notify);
+        process.stdout.write(lastWatchReport + "\n");
         return;
       }
       await openDashboard(ctx, loadTuiConfig());
