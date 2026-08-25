@@ -19,6 +19,8 @@
 │   ├── souls/
 │   ├── notif-box/
 │   ├── bash-first/
+│   ├── self-profiler/             §9 — in-session profiler feeding /refine
+│   ├── ompa-tui/                  §8 — modular panel dashboard + status widget
 │   └── fleet/
 ├── completions/                   shell completions (ompa.fish, omp.fish)
 ├── tests/test-ompa.sh             anti-slop CLI harness (mock registry, sandboxed HOME)
@@ -32,6 +34,10 @@
 ~/.local/state/fleet/runs.jsonl      # subagent run log (spawn → reap)
 ~/.local/state/fleet/queue.json      # capped-spawn wait queue
 ~/.local/state/fleet/checkpoints/    # offloaded-wait checkpoints
+~/.local/state/ompa/profile.jsonl          # §9 profiler event log (rotated)
+~/.local/state/ompa/profile-distilled.json # §9 compact aggregate for /refine + TUI
+~/.local/state/ompa/refine-prime.jsonl     # §10 audit journal of applied prime edits
+~/.prime/agent/refine-prime-enabled        # §10 gate: prime edits allowed (ompa refine-prime)
 ~/.prime/agent/resource-policy.json  # GOVERNED: written by `ompa sync` (never hand-edited)
 ```
 
@@ -407,7 +413,139 @@ Houseguest rule #3 for the fleet's litter (OPTIMIZE.md Surface 3):
 
 ---
 
-## 8. CLI contract (ompa)
+## 8. ompa-tui (modular dashboard + status widget)
+
+**Job:** one dashboard, many panels, config-driven, reload-aware. Panels are
+small modules returning fresh lines on demand; a registry composes them behind
+a tab bar.
+
+### 8.1 Panel registry
+
+Each panel = `{id, title, refresh(): string[]}`. Panels read their data from
+disk on every refresh, so nothing caches stale state. Built-ins:
+
+| id | reads | shows |
+|---|---|---|
+| resource | `/proc` + resource-policy.json + usage.jsonl tail | load/mem/swap vs policy, last guard events |
+| chat | chat.jsonl tail | global agent chat |
+| notifs | notif.log tail | notifications, ACTION/error marked ⚠ |
+| souls | souls dir | name/role/specialty per soul |
+| fleet | runs.jsonl + queue.json | recent subagent runs, queue depth |
+| profile | profile-distilled.json (§9) | turns/tools/holds + refine hints |
+| help | static | keys + config pointers |
+
+Config (`ompr.toml [tui]`): `panels = [...]` (order + subset), `refreshMs`,
+`statusWidget`, `statusRefreshMs`. Enabled panels are rebuilt on every
+`session_start` — including reason `reload` — so editing ompr.toml and
+`/reload` updates the TUI without a restart (the "updates on reload" contract).
+`session_shutdown` (reload/quit/switch) disposes timers and clears the widget —
+no leaked timers, invariant #17.
+
+### 8.2 Surfaces
+
+- **Dashboard overlay** — `/dashboard` or `/ompa`, hotkey `ctrl+alt+o`.
+  `ctx.ui.custom` overlay anchored right-center. Keys: ←→/Tab switch panel,
+  ↑↓ scroll, r refresh, q/Esc close. Same overlay pattern as chat/notifs.
+- **Status widget** — `ctx.ui.setWidget("ompa-status", factory, {placement:
+  "aboveEditor"})`: one line above the editor with
+  `⚡ load/mem/swap · 💬 chat · ⚑ action notifs · 🛠 profiler tool calls`.
+  Toggle: `/ompa widget on|off`. Refreshes at `statusRefreshMs`.
+
+Both surfaces sanitize all external text (F3) and truncate to viewport width.
+
+---
+
+## 9. self-profiler (thin profiler feeding /refine)
+
+**Job:** record the agent's own behaviour cheaply and distill it into a small,
+deterministic, evidence-backed refinement suggestion — no LLM cost per distill.
+
+### 9.1 Events (JSONL, `~/.local/state/ompa/profile.jsonl`)
+
+| event | fields |
+|---|---|
+| turn | turnIndex, durationMs |
+| tool | toolCallId, tool, snippet (≤120 chars) |
+| result | toolCallId, tool, durationMs, isError |
+
+Rotated at 1 MB (keep newest half). Source of truth for the TUI + refine.
+
+### 9.2 Distilled profile (`profile-distilled.json`)
+
+Written at `agent_end` and by `/profile`; always < 4 KB so /refine can read it
+without token bloat:
+
+```json
+{ "generated": ISO, "turns": N, "avgTurnMs": X, "holds": H,
+  "tools": {"bash": {"count": C, "totalMs": T, "maxMs": M, "errors": E}},
+  "repeatedCommands": [{"prefix": "cargo build", "count": 3}],
+  "refineHints": ["Tool bash failed 3 times ...", "..."] }
+```
+
+`holds` counts `action:"held"` lines in the resource-guard log (pressure
+evidence). `refineHints` are deterministic thresholds (errors ≥ 3, avg tool
+latency > 30 s, repeated command ≥ 3, holds ≥ 3, avg turn > 2 min) — each hint
+is phrased as a `refine.run("<hint>")` instruction.
+
+### 9.3 Commands
+
+- `/profile` — print the distilled profile + refine hints.
+- `/profile reset` — clear log + distilled.
+
+---
+
+## 10. refine prime access (audited)
+
+**Job:** let `/refine` modify the prime-agent user surface (config, extensions,
+souls, prompts, skills, themes), not just the continual-harness state file.
+
+### 10.1 Status before (measured)
+
+Refine applied only `prompt | memory | skill | subagent` edits to
+`harness_state.json`; the base system prompt was blocked, and no file/config
+surface was reachable. Prime access did **not** already exist.
+
+### 10.2 What was added
+
+`bin/apply-refine-prime-patch.py` (idempotent, `--remove` to revert, backup at
+`refinement.js.orig-ompa`) patches prime-agent's `applyRefinementProposal` to
+accept a fifth edit kind:
+
+```json
+{ "action": "update" | "delete", "kind": "prime",
+  "path": "<allowlisted abs path>", "content": "<new contents>",
+  "metadata": { "operation": "write" | "delete" }, "reason": "..." }
+```
+
+- `validateEdit` → `validatePrimeEdit` (allowlist check, op check, content check).
+- `applyPrimeEdit` performs the edit: atomic tmp+rename, `.bak-refine` backup,
+  journaled to `~/.local/state/ompa/refine-prime.jsonl` (ts/id/op/path/bytes/
+  backup/reason). The refine planner prompt documents the new kind so the LLM
+  can actually emit it.
+
+**Allowlist** (deny-list wins): `~/.prime/oh-my-prime-agent`, `extensions/`,
+`souls/`, `prompts/`, `~/.agents/skills/`, `~/.config/kitty`, `~/.config/hypr`,
+`resource-policy.json`. **Deny-list:** `~/.npm-global/lib/node_modules/
+prime-agent` (never self-edit the running harness source) and
+`~/.prime/agent/harness*` (the continual-harness store refine already owns).
+
+### 10.3 Gate
+
+Prime edits apply only when the gate file `~/.prime/agent/refine-prime-enabled`
+exists (invariant #18). CLI:
+
+```
+ompa refine-prime enable    # applies the patch (idempotent) + creates the gate
+ompa refine-prime disable   # removes the gate (patch stays; edits refused)
+ompa refine-prime status    # patch state, gate, allowlist, journal tail
+```
+
+`[refine] primeAccess = true` in ompr.toml mirrors the gate for humans; the
+gate file is authoritative.
+
+---
+
+## 11. CLI contract (ompa)
 
 ```
 ompa install            link enabled plugins (from ompr.toml §plugins)
@@ -423,13 +561,16 @@ ompa gc                 run hygiene GC now (artifacts/transcripts > maxAgeDays)
 ompa reap               kill idle omp/pi background workers (auto-cleanup)
 ompa enable-reap        wire the 5-min systemd user timer (auto; also on install)
 ompa completions        install shell completions (fish; auto-run on install)
+ompa refine-prime       gate /refine prime-modification access (enable|disable|status; §10)
 ompa --version          print version
 ```
+In-TUI commands (from the §8/§9 plugins): `/dashboard` (alias `/ompa`),
+`ctrl+alt+o` toggle, `/ompa widget on|off`, `/profile`, `/profile reset`.
 Exit codes: 0 ok, 1 user error, 2 unknown plugin/theme.
 
 ---
 
-## 9. Invariants (regression guards)
+## 12. Invariants (regression guards)
 
 1. The guard never blocks a tool call longer than `maxHoldMs`.
 2. `:name:` parsing uses `indexOf(":", 1)`; never bare `split(":")`.
@@ -458,15 +599,25 @@ Exit codes: 0 ok, 1 user error, 2 unknown plugin/theme.
     re-appended within `rateLimitTurns`; identical blocks are deduped.
 16. `ompa gc` / hygiene only ever touches dead sessions' artifacts — live
     sessions are never reaped or truncated.
+17. ompa-tui leaves no leaked timers: every panel/widget disposes on
+    `session_shutdown` (reload/quit/switch) and rebuilds on `session_start`
+    (including reason `reload`), so `/reload` reflects config edits.
+18. Prime edits (§10) apply only when the gate file exists; every applied prime
+    edit is atomic, backed up (`.bak-refine`), and journaled. Deny-list paths
+    (npm dist, harness store) are always refused.
+19. The self-profiler never breaks the session: all reads/writes are
+    best-effort, the event log is capped/rotated, and distill is deterministic
+    (no LLM call).
 
 ---
 
-## 10. Milestone mapping
+## 13. Milestone mapping
 
 | Milestone | Build contract | Done? |
 |-----------|---------------|-------|
 | M1 framework | repo, CLI, config, 5 plugins, 2 themes, license, CI | ✅ |
 | M2 souls+fleet-v1 | vault + commands + injection + auto-capture; backend eval; fleet cap/queue + proactive reaping | ⏳ |
+| M2.5 tui+profile+prime | modular dashboard (§8) + self-profiler (§9) + refine prime access (§10) | ✅ this session |
 | M3 sitter+fleet-v2 | §6 telemetry + ladder + loop; telemetry history; theme previews; fleet offload-on-wait + focus-dormant TUIs + tab-flash notify | — |
 | M4 one-command | fresh-machine installer; multi-harness (gated) | — |
 | M5 launch | OSS release; product tier separation (free core / paid sitter) | — |

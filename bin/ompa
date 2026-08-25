@@ -368,6 +368,59 @@ cmd_completions() {
   esac
 }
 
+cmd_refine_prime() {
+  # Gate for /refine prime modifications (patched into prime-agent's refine
+  # apply loop by bin/apply-refine-prime-patch.py). Prime edits only ever touch
+  # the allowlisted user surface (ompr.toml, extensions, souls, prompts,
+  # ~/.agents/skills, kitty/hypr config, resource-policy.json) — never
+  # ~/.npm-global (the running harness source) or the harness state file.
+  local GATE="$HOME/.prime/agent/refine-prime-enabled"
+  local JOURNAL="$HOME/.local/state/ompa/refine-prime.jsonl"
+  local REFINE_JS="${OMPA_REFINE_JS:-$HOME/.npm-global/lib/node_modules/prime-agent/dist/core/refinement/refinement.js}"
+  case "${1:-status}" in
+    enable)
+      if ! grep -q '\[ompa\] refine-prime support v1' "$REFINE_JS" 2>/dev/null; then
+        python3 "$ROOT/bin/apply-refine-prime-patch.py" || { err "patch failed — prime modifications NOT enabled"; return 1; }
+      fi
+      mkdir -p "$(dirname "$GATE")"
+      touch "$GATE"
+      say "refine prime modifications ENABLED (gate: $GATE)"
+      ;;
+    disable)
+      rm -f "$GATE"
+      say "refine prime modifications DISABLED"
+      ;;
+    status)
+      if grep -q '\[ompa\] refine-prime support v1' "$REFINE_JS" 2>/dev/null; then
+        echo "patch: applied"
+      else
+        echo "patch: NOT applied (run: ompa refine-prime enable)"
+      fi
+      if [[ -f "$GATE" ]]; then echo "gate: ENABLED"; else echo "gate: disabled"; fi
+      echo "allowlist:"
+      printf '  %s\n' \
+        "$HOME/.prime/oh-my-prime-agent" \
+        "$HOME/.prime/agent/extensions" \
+        "$HOME/.prime/agent/souls" \
+        "$HOME/.prime/agent/prompts" \
+        "$HOME/.agents/skills" \
+        "$HOME/.config/kitty" \
+        "$HOME/.config/hypr" \
+        "$HOME/.prime/agent/resource-policy.json"
+      echo "deny-list:"
+      printf '  %s\n' "$HOME/.npm-global/lib/node_modules/prime-agent" "$HOME/.prime/agent/harness"
+      if [[ -f "$JOURNAL" ]]; then
+        echo "recent journal:"
+        tail -n 4 "$JOURNAL"
+      fi
+      ;;
+    *)
+      err "usage: ompa refine-prime enable|disable|status"
+      return 1
+      ;;
+  esac
+}
+
 cmd_help() {
   cat <<EOF
 ompa — oh-my-prime-agent (alias form)
@@ -384,6 +437,7 @@ ompa — oh-my-prime-agent (alias form)
   ompa reap            kill idle omp/pi background workers (auto-cleanup)
   ompa enable-reap     wire the 5-min systemd user timer (auto)
   ompa completions     install shell completions (fish, auto-run on install)
+  ompa refine-prime   gate /refine prime-modification access (enable|disable|status)
   ompa help
 
 Config: $CONF
@@ -403,6 +457,7 @@ case "${1:-help}" in
   reap) cmd_reap ;;
   enable-reap) cmd_enable_reap ;;
   completions) cmd_completions "${2:-fish}" ;;
+  refine-prime) cmd_refine_prime "${2:-status}" ;;
   help|--help|-h) cmd_help ;;
   *) cmd_help ;;
 esac

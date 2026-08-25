@@ -17,6 +17,8 @@ system, alias `ompa` (avoids collision with oh-my-posh `omp` / oh-my-pi).
 | global-chat | `::` global chat, `:name:` direct routing, souls + project familiarity |
 | notif-box | in-TUI notifications panel (reads the terminal-notif log) |
 | bash-first | per-turn tool-choice heuristic: shell for shell work, ipython for logic |
+| self-profiler | thin in-session profiler: tool latency/errors, repeated shell patterns, refine hints (`/profile`) |
+| ompa-tui | modular dashboard (`/dashboard`, `ctrl+alt+o`) + compact status widget; panel registry, config-driven, rebuilds on `/reload` |
 
 ## Commands
 
@@ -25,6 +27,7 @@ system, alias `ompa` (avoids collision with oh-my-posh `omp` / oh-my-pi).
     ompa disable <plugin>   disable one plugin
     ompa theme cp2077       apply a kitty tab-bar theme
     ompa status             show plugin/theme/soul state
+    ompa refine-prime       gate /refine prime-modification access (enable|disable|status)
 
 ## Config
 

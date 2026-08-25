@@ -148,5 +148,28 @@ mock_registry_ok_empty
 check "gc aborts on empty registry"         test "$rc" -ne 0
 check "gc deletes nothing on empty registry" test -d "$HOME/.prime/agent/session-artifacts/deadbbbb-2222-3333-4444-555566667777"
 
+# ---------------- refine-prime gate ----------------
+# Sandbox: point OMPA_REFINE_JS at a fake (already-patched) refine.js so the
+# gate logic is tested without touching the real npm install.
+mkdir -p "$TD/npm-refine"
+cat > "$TD/npm-refine/refinement.js" <<'FAKE'
+export function noop() {}
+// // [ompa] refine-prime support v1
+FAKE
+export OMPA_REFINE_JS="$TD/npm-refine/refinement.js"
+
+RP_STATUS=$("$TD/ompa" refine-prime status 2>/dev/null || true)
+check "refine-prime status shows patch applied"   grep -q "patch: applied" <<< "$RP_STATUS"
+check "refine-prime status shows gate disabled"   grep -q "gate: disabled" <<< "$RP_STATUS"
+"$TD/ompa" refine-prime enable >/dev/null 2>&1
+check "refine-prime enable creates gate"          test -f "$HOME/.prime/agent/refine-prime-enabled"
+RP_STATUS=$("$TD/ompa" refine-prime status 2>/dev/null || true)
+check "refine-prime status shows gate enabled"    grep -q "gate: ENABLED" <<< "$RP_STATUS"
+"$TD/ompa" refine-prime disable >/dev/null 2>&1
+check "refine-prime disable removes gate"         test ! -f "$HOME/.prime/agent/refine-prime-enabled"
+"$TD/ompa" refine-prime bogus >/dev/null 2>&1
+check "refine-prime bad arg fails"                test $? -ne 0
+unset OMPA_REFINE_JS
+
 echo
 if [ "$fail" -eq 0 ]; then echo "ALL TESTS PASSED"; else echo "TEST FAILURES: $fail"; exit 1; fi

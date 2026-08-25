@@ -32,7 +32,16 @@ runGcOnTick = true       # native governor tick, not a manual command
 rateLimitTurns = 10      # resource context re-injected only on pressure change or every N turns
 
 [plugins]
-enabled = ["resource-guard", "global-chat", "souls", "notif-box", "bash-first"]
+enabled = ["resource-guard", "global-chat", "souls", "notif-box", "bash-first", "self-profiler", "ompa-tui"]
+
+[tui]
+panels = ["resource", "chat", "notifs", "souls", "fleet", "profile", "help"]  # dashboard panels, in order
+refreshMs = 2000          # dashboard panel refresh interval
+statusWidget = true       # compact one-line status above the editor
+statusRefreshMs = 5000    # status widget refresh interval
+
+[refine]
+primeAccess = true        # /refine may emit audited `prime` edits (gate file mirrors this)
 
 [theme]
 name = "cp2077"

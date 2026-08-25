@@ -133,3 +133,22 @@ The north star, in order of ambition:
 
 Remaining M2: memory vault eval (mem0/mempalace vs own — decision deferred in
 SPEC), project-familiarity→memory cross-links, `/recall` UI polish.
+
+## M2.5 progress (this session)
+
+- **ompa-tui shipped** (SPEC-DETAIL §8): modular panel-registry dashboard —
+  `/dashboard` / `/ompa`, `ctrl+alt+o`; panels resource/chat/notifs/souls/
+  fleet/profile/help; config-driven via `ompr.toml [tui]`; persistent compact
+  status widget above the editor. Rebuilds on every `session_start` (incl.
+  reload) and disposes timers on `session_shutdown` — the TUI updates on
+  `/reload`.
+- **self-profiler shipped** (SPEC-DETAIL §9): event-driven JSONL profiler +
+  distilled profile (`profile-distilled.json`) with deterministic refine hints;
+  `/profile` prints the profile and the `refine.run(...)` instruction to use.
+- **refine prime access shipped** (SPEC-DETAIL §10): `bin/apply-refine-prime-
+  patch.py` (idempotent) adds an audited `prime` edit kind to prime-agent's
+  refine apply loop (write/delete on the allowlisted user surface only, atomic
+  + backup + journal), gated by `ompa refine-prime enable|disable|status`.
+  Verified: prime write/delete/deny/gate-off all behave in a live Node test.
+- **Tests**: `tests/test-ompa.sh` now 36 checks (sync/gc/prune-safe +
+  refine-prime gate), all passing.
