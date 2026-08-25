@@ -92,8 +92,8 @@ class NotifsView extends Container {
       const lvl = LEVEL_THEME[e.level || "info"] || "info";
       const marker = needsAction(e) ? t.fg("error", "⚠ ") : "  ";
       const ts = (e.ts || "").padEnd(8);
-      const title = truncateToWidth(e.title || "", Math.max(10, width - 30));
-      const body = truncateToWidth(e.body || "", Math.max(10, width - 30));
+      const title = truncateToWidth(sanitizeTerminal(e.title || ""), Math.max(10, width - 30));
+      const body = truncateToWidth(sanitizeTerminal(e.body || ""), Math.max(10, width - 30));
       const selMark = i === this.sel ? "»" : " ";
       lines.push(`${selMark} ${marker}${t.fg(lvl, ts)} ${t.fg("neutral", title)}`);
       if (body) lines.push(`  ${t.fg("muted", body)}`);
@@ -102,6 +102,17 @@ class NotifsView extends Container {
     lines.push(t.fg("muted", "↑↓ scroll · r refresh · q close"));
     return lines;
   }
+}
+
+
+/** F3: strip ANSI/CSI escapes + control chars before rendering user text. */
+function sanitizeTerminal(s: string): string {
+  return (s || "")
+    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "")              // CSI
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?/g, "")      // OSC (title, hyperlink)
+    .replace(/\x1b[PX^_][^\x07\x1b]*(?:\x07|\x1b\\)?/g, "")  // DCS/PM/APC
+    .replace(/\x1b[()#][0-9A-Za-z]?/g, "")                   // 2-char escapes
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1a\x1c-\x1f\x7f]/g, ""); // control chars (\n \t kept)
 }
 
 export default function notificationsExtension(pi: ExtensionAPI): void {

@@ -15,7 +15,7 @@ ompa makes the agent a good citizen on your desktop.
 ## What ompa IS
 
 A thin desktop-ergonomics layer for Prime Agent (and, later, other CLI
-harnesses). Four pillars:
+harnesses). Five pillars:
 
 1. **Resource governor** — record / throttle / HOLD heavy tool calls against a
    global policy; inject live load/mem/swap as per-turn context so the agent
@@ -26,6 +26,33 @@ harnesses). Four pillars:
    routing to the most-familiar soul.
 4. **Theme engine** — gradient tab bars, per-soul accents, Hyprland rules,
    notification box. Desktop aesthetics as a first-class feature.
+5. **Fleet** — subagent lifecycle governor. Cap, queue, offload, reap. A
+   hundred subagents should behave as politely as one guest.
+
+
+
+## The Fleet (subagent lifecycle)
+
+One agent is a guest. A fleet of subagents is a party. ompa governs the party
+with the same house rules — so a hundred subagents cost what one should.
+
+- **Cap 15, ever.** At most 15 live subagents at any time. At the cap, new
+  work — high-priority included — queues and waits. Priority only orders the
+  queue; the cap is absolute.
+- **Run until wait, then offload.** A subagent keeps working in the background
+  until it reaches a wait state (blocked on you, awaiting a peer, idle-sleep).
+  The moment it waits, it is offloaded: state checkpointed, memory released,
+  restored on wake. The box never carries sleeping agents.
+- **Dormant TUIs.** TUIs are unbounded in count only because the renderer can
+  go dormant when unfocused and wake on focus — a dormant TUI costs ~0.
+  Unbounded count ships only with focus-dormancy (SPEC-DETAIL §7.3); otherwise
+  TUIs fall back to a fixed cap.
+- **Tab-flash notify.** A dormant agent can still matter: a real agent message
+  flashes its terminal tab in the soul's high-contrast accent. The flash is
+  the only visible cost of an unfocused agent.
+- **Proactive reaping, native.** Finished subagents are reaped by the
+  governor, not by a cleanup command you remember to run. Houseguest rule #1,
+  applied to the fleet: no orphans, no zombies, no checkpoint litter.
 
 
 
@@ -62,6 +89,7 @@ An agent on your machine is a guest in your house. These are non-negotiable:
 
 1. **Never leave the oven on.** If you start a job, you own it to completion or
    kill it. No orphaned builds, no `nohup` nobody reaps, no stale processes.
+   Fleets included: no orphaned subagents, no zombie workers.
 2. **Replace the roll if asked.** Do the implied task, not just the literal
    command. "Run the build" includes cleaning up after it.
 3. **Take out the trash.** Proactively clean what you made: temp files, stale
@@ -90,6 +118,8 @@ therefore governs BOTH: what the agent runs, and how the harness renders it.
 - Souls with identity + project familiarity. openhuman has life-memory, not
   agent identity.
 - Theme engine. Pure desktop aesthetics — none of them touch it.
+- Fleet discipline. Subagent cap/queue/offload/reap. Everyone governs the
+  individual agent; nobody governs the fleet.
 - Bash-first heuristic. Nobody encodes tool-choice ergonomics.
 - Thin. Focused ergonomics layer, not a kitchen-sink OS.
 
@@ -144,9 +174,11 @@ host-health is the thin core. Everything else is an opt-in plugin.
 ## Milestones
 
 - M1 (now): stable framework, git init, initial commit, license, README.
-- M2: souls get persistence + memory vault; fabric gets rooms + routing polish.
+- M2: souls get persistence + memory vault; fabric gets rooms + routing polish;
+  fleet gets cap/queue + proactive reaping.
 - M3: governor gets telemetry history + status dashboard; theme engine gets
-  previews.
+  previews; fleet gets wait-state offload + focus-dormant TUIs + tab-flash
+  notify.
 - M4: one-command install on a fresh machine; multi-harness targets (Claude
   Code, Codex) gated behind demand.
 - M5: public release (OSS) — the distribution channel; direction decided (product).

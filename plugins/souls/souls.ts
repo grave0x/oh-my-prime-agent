@@ -45,6 +45,16 @@ function vaultPath(name: string): string {
   return join(SOULS_DIR, name.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-") + MEM_EXT);
 }
 
+function sha1(s: string): string {
+  // tiny FNV-1a hash — deterministic content fingerprint (F5 dedupe)
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = (h * 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, "0");
+}
+
 function readFacts(name: string): Fact[] {
   const p = vaultPath(name);
   if (!existsSync(p)) return [];
@@ -140,8 +150,14 @@ export default function souls(pi: ExtensionAPI): void {
       if (!usedTools) return; // smalltalk or pure answers are not vault material
       const topic = promptText.slice(0, 90);
       const facts = readFacts(name);
-      if (facts.slice(-5).some((f) => f.content.includes(topic.slice(0, 30)))) return; // dedupe
-      remember(name, `Worked on: ${topic}`, "auto");
+      // F5: hash-based dedupe — same topic never accumulates, not just last-5
+      const topicHash = sha1(topic).slice(0, 12);
+      if (facts.some((f) => f.content.startsWith("Worked on:") && f.tags?.includes("h:" + topicHash))) return;
+      const f = remember(name, `Worked on: ${topic}`, "auto");
+      f.tags = ["h:" + topicHash];
+      // rewrite with the tag attached
+      const all = readFacts(name).map((x) => (x.id === f.id ? f : x));
+      writeFacts(name, all);
     } catch { /* never break the loop */ }
   });
 

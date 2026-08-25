@@ -78,8 +78,33 @@ function readEntries(): ChatEntry[] {
   } catch { return []; }
 }
 
+
+/** F3: strip ANSI/CSI escapes + control chars before rendering user text. */
+function sanitizeTerminal(s: string): string {
+  return (s || "")
+    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "")              // CSI
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?/g, "")      // OSC (title, hyperlink)
+    .replace(/\x1b[PX^_][^\x07\x1b]*(?:\x07|\x1b\\)?/g, "")  // DCS/PM/APC
+    .replace(/\x1b[()#][0-9A-Za-z]?/g, "")                   // 2-char escapes
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1a\x1c-\x1f\x7f]/g, ""); // control chars (\n \t kept)
+}
+
 function soulFileName(name: string): string {
-  return join(SOULS_DIR, name.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-") + SOUL_EXT);
+  return join(SOULS_DIR, sanitizeName(name) + SOUL_EXT);
+}
+
+/** F2: reject control chars/newlines; force the same charset soulFileName uses. */
+function sanitizeName(name: string): string {
+  const cleaned = (name || "")
+    .toLowerCase()
+    .replace(/[\x00-\x1f\x7f]/g, "")   // control chars: newline injection vector
+    .replace(/[^a-z0-9_-]+/g, "-");
+  return cleaned.replace(/^-+|-+$/g, "");
+}
+
+/** F2: values written into frontmatter must be single-line. */
+function sanitizeValue(v: string): string {
+  return (v || "").replace(/\r\n|\n|\r/g, " ").replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
 }
 
 interface SoulMeta {
@@ -147,8 +172,8 @@ function writeSoul(meta: SoulMeta): void {
   if (meta.role) lines.push(`role: ${meta.role}`);
   if (meta.session) lines.push(`session: ${meta.session}`);
   if (meta.sessionId) lines.push(`session_id: ${meta.sessionId}`);
-  if (meta.specialty) lines.push(`specialty: ${meta.specialty}`);
-  if (meta.personality) lines.push(`personality: ${meta.personality}`);
+  if (meta.specialty) lines.push(`specialty: ${sanitizeValue(meta.specialty)}`);
+  if (meta.personality) lines.push(`personality: ${sanitizeValue(meta.personality)}`);
   if (meta.projects && Object.keys(meta.projects).length) {
     lines.push(`projects: ${JSON.stringify(meta.projects)}`);
   }
@@ -216,6 +241,8 @@ function setKittyTabTitle(title: string): void {
 }
 
 function claimSoul(name: string, ctx: ExtensionContext): { ok: boolean; reason?: string } {
+  name = sanitizeName(name);
+  if (!name) return { ok: false, reason: "name must contain letters, digits, _ or -" };
   const sid = ctx.sessionManager?.getSessionId?.() ?? "";
   const existing = readSouls();
   for (const [n, meta] of Object.entries(existing)) {
@@ -243,7 +270,10 @@ function claimSoul(name: string, ctx: ExtensionContext): { ok: boolean; reason?:
 function appendEntry(e: ChatEntry): void {
   ensureDir();
   const line = JSON.stringify({ ts: now(), ...e }) + "\n";
-  try { appendFileSync(CHAT_LOG, line, "utf8"); } catch { /* ignore */ }
+  try { (function () {
+        try { const st = statSync(CHAT_LOG); if (st.size > 5 * 1024 * 1024) renameSync(CHAT_LOG, CHAT_LOG + ".1"); } catch { /* no log yet */ }
+        appendFileSync(CHAT_LOG, line, "utf8");
+      })(); } catch { /* ignore */ }
 }
 
 function execAsync(cmd: string, args: string[]): Promise<string> {
@@ -376,7 +406,7 @@ class ChatView extends Container {
       const target = e.to && e.to !== "*" ? `→${e.to.slice(0, 8)} ` : "";
       const selMark = i === this.sel ? "»" : " ";
       const color = e.from === "user" ? "success" : e.to && e.to !== "*" ? "warning" : "info";
-      const text = truncateToWidth(e.text || "", Math.max(10, width - 24));
+      const text = truncateToWidth(sanitizeTerminal(e.text || ""), Math.max(10, width - 24));
       lines.push(`${selMark}${t.fg(color, `[${(e.ts || "").slice(11, 19)}]`)} ${t.fg("neutral", room + from + target)}`);
       lines.push(`  ${t.fg("neutral", text)}`);
     }
@@ -485,7 +515,7 @@ export default function globalChatExtension(pi: ExtensionAPI): void {
       const setMatch = trimmed.match(/^set\s+(specialty|personality)\s+([\s\S]+)$/i);
       if (setMatch) {
         const field = setMatch[1].toLowerCase();
-        const value = setMatch[2].trim();
+        const value = sanitizeValue(setMatch[2].trim());
         const sid = ctx.sessionManager?.getSessionId?.() ?? "";
         const souls = readSouls();
         for (const [name, meta] of Object.entries(souls)) {
@@ -499,7 +529,7 @@ export default function globalChatExtension(pi: ExtensionAPI): void {
         ctx.ui.notify("Claim a soul first: /soul <name>", "error");
         return;
       }
-      const name = trimmed;
+      const name = sanitizeName(trimmed);
       if (!name) {
         const souls = readSouls();
         ctx.ui.notify(`Your soul: ${current}. Claim: /soul <name> · set: /soul set specialty <text>`, "info");

@@ -17,11 +17,10 @@
  * Tuning lives in the global config file, not in code.
  */
 
-import { existsSync, readFileSync, writeFileSync, appendFileSync, mkdirSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, appendFileSync, mkdirSync, readdirSync, statSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { cpus } from "node:os";
-import { execFileSync } from "node:child_process";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 
 const POLICY_PATH = join(homedir(), ".prime", "agent", "resource-policy.json");
@@ -94,7 +93,9 @@ function effectivePolicy(base: Policy, cwd: string): Policy {
   let best: Partial<Policy> | undefined;
   let bestLen = -1;
   for (const [prefix, over] of Object.entries(base.perProject)) {
-    if (cwd.startsWith(prefix) && prefix.length > bestLen) { best = over; bestLen = prefix.length; }
+    // path-boundary match: prefix must end the segment (/repo vs /repo-evil) — F6
+    const atBoundary = cwd === prefix || cwd.startsWith(prefix + "/") || cwd.startsWith(prefix + "\\");
+    if (atBoundary && prefix.length > bestLen) { best = over; bestLen = prefix.length; }
   }
   return best ? { ...base, ...best } : base;
 }
@@ -123,6 +124,11 @@ function pressured(p: Policy): boolean {
 function record(action: string, tool: string, extra: Record<string, unknown>): void {
   try {
     mkdirSync(STATE_DIR, { recursive: true });
+    // F6: rotate at 5MB so the log can't fill the disk (houseguest: take out the trash)
+    try {
+      const st = statSync(USAGE_LOG);
+      if (st.size > 5 * 1024 * 1024) renameSync(USAGE_LOG, USAGE_LOG + ".1");
+    } catch { /* no log yet */ }
     const s = systemStats();
     appendFileSync(USAGE_LOG, JSON.stringify({
       ts: new Date().toISOString(), action, tool,
@@ -142,10 +148,13 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-/** Wrap a shell command with nice+ionice. Safe for multi-line scripts. */
+/** Wrap a shell command with nice+ionice. */
 function throttleShell(cmd: string, p: Policy): string {
   const nice = `nice -n ${p.niceLevel} ionice -c ${p.ioClass}`;
-  if (/\n/.test(cmd)) {
+  // chains (&, |, ;, $(), `) or newlines rebind what nice applies to —
+  // wrap the WHOLE command so nothing escapes throttling (F1 fix).
+  const chains = /&&|\|\||[;&]|\$\(|`/.test(cmd);
+  if (/\n/.test(cmd) || chains) {
     return `${nice} bash -c '${cmd.replace(/'/g, "'\\''")}'`;
   }
   return `${nice} ${cmd}`;
@@ -154,17 +163,24 @@ function throttleShell(cmd: string, p: Policy): string {
 /** Inject -j/--jobs into a known build command if it lacks one. */
 function injectJobs(cmd: string, p: Policy): string {
   if (/\n/.test(cmd)) return cmd;
-  const tokens = cmd.trim().split(/\s+/);
-  const first = tokens[0]?.toLowerCase() || "";
   const already = /(-j\s*\d+|--jobs(\s|=)?\d+)/.test(cmd);
   if (already) return cmd;
-  if (first === "cargo") return cmd.replace(/^(cargo\s+\S+)/, `$1 -j ${p.maxJobs}`);
-  if (first === "make" || first === "ninja") return `${cmd} -j ${p.maxJobs}`;
-  if (first === "cmake") return `${cmd} -- -j ${p.maxJobs}`;
-  // gcc/clang/cc direct compile: -j is a make concept; use MAKE env + piggyback is fragile.
-  // For single-source compiles, -j does nothing useful — throttle via nice only.
-  // npm/pnpm/yarn: leave as-is (they parallelize internally).
-  return cmd;
+  // process each shell segment so `cd repo && cargo build` still gets -j (F1 fix)
+  const parts = cmd.split(/(&&|\|\||[;&|])/g);
+  let changed = false;
+  const out = parts.map((seg) => {
+    const lead = /^\s*/.exec(seg)?.[0] || "";
+    const s = seg.trim();
+    if (!s || /^(&&|\|\||[;&|])$/.test(s)) return seg;
+    const first = s.split(/\s+/)[0]?.toLowerCase() || "";
+    if (first === "cargo") { const r = s.replace(/^(cargo\s+\S+)/, `$1 -j ${p.maxJobs}`); if (r !== s) { changed = true; return lead + r; } return seg; }
+    if (first === "make" || first === "ninja") { changed = true; return lead + `${s} -j ${p.maxJobs}`; }
+    if (first === "cmake") { changed = true; return lead + `${s} -- -j ${p.maxJobs}`; }
+    // gcc/clang direct compiles: -j is a make concept; throttle via nice only.
+    // npm/pnpm/yarn: parallelize internally — leave as-is.
+    return seg;
+  });
+  return changed ? out.join("") : cmd;
 }
 
 export default function resourceGuard(pi: ExtensionAPI): void {

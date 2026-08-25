@@ -12,6 +12,13 @@ maxJobs = 4
 niceLevel = 19
 ioClass = 3
 
+[fleet]
+maxSubagents = 15      # hard cap on live subagents; new work queues at the cap
+offloadSleepMs = 30000 # idle-sleep threshold before a waiting agent offloads
+dormantMs = 2000       # renderer idle before a TUI goes dormant (focus-aware)
+focusDormant = true    # prerequisite gate for unbounded TUI count (§7.3)
+reapGraceMs = 60000    # finished-but-unreaped grace before the governor reaps
+
 [plugins]
 enabled = ["resource-guard", "global-chat", "souls", "notif-box", "bash-first"]
 

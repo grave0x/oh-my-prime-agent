@@ -18,7 +18,8 @@
 │   ├── global-chat/
 │   ├── souls/
 │   ├── notif-box/
-│   └── bash-first/
+│   ├── bash-first/
+│   └── fleet/
 └── themes/<name>/                 kitty-tab-bar.py + soul-accents + hypr rules
 
 ~/.prime/agent/extensions/         symlink targets (ompa install)
@@ -26,6 +27,9 @@
 ~/.local/state/resource-guard/usage.jsonl
 ~/.local/state/agent-chat/chat.jsonl
 ~/.local/state/terminal-notif/notif.log
+~/.local/state/fleet/runs.jsonl      # subagent run log (spawn → reap)
+~/.local/state/fleet/queue.json      # capped-spawn wait queue
+~/.local/state/fleet/checkpoints/    # offloaded-wait checkpoints
 ```
 
 **Install contract:** `ompa install` symlinks each enabled plugin's `*.ts` into
@@ -269,7 +273,95 @@ Baseline = rolling 15-min stats; anomaly = deviation > 3σ or hard-threshold hit
 
 ---
 
-## 7. CLI contract (ompa)
+## 7. fleet (subagent lifecycle governor)
+
+**Job:** cap, queue, offload, reap. Make a fleet of subagents as polite as one
+guest. The guest rules govern the agent; the fleet governs the agents.
+
+### 7.1 Cap & admission
+
+`maxSubagents = 15` (default; ompr.toml `[fleet]`).
+
+- Counter: live subagents (state ≠ done|offloaded). Sampled at spawn request.
+- At the cap, a spawn request **queues and waits** — high-priority work
+  included. The cap is absolute; priority only orders the queue.
+- Queue entry: `{id, priority, queuedAt}`. Priorities: critical(0) > normal(1)
+  > best-effort(2); default normal.
+- Dequeue: when a live subagent enters done/offloaded, admit the
+  highest-priority item; ties → FIFO (`queue.json` rewritten atomically).
+- Invariant: offloaded (checkpointed) and done subagents never hold a slot.
+
+### 7.2 Wait-state offload
+
+A subagent is **offloadable** when it enters a wait state:
+
+- blocked on user input (awaiting a message / approval), or
+- awaiting an async peer reply (agent-network inbox empty), or
+- sleeping > `offloadSleepMs` (30s default) with no queued work.
+
+Offload protocol (checkpoint → release → restore):
+
+1. **checkpoint** — persist session transcript delta + in-flight intent to
+   `~/.local/state/fleet/checkpoints/<id>.jsonl` (atomic temp+rename).
+2. **release** — stop the renderer and drop the worker's memory (worker exits;
+   SIGSTOP is NOT offload — it keeps RSS). Offload = durable checkpoint +
+   process exit.
+3. **restore (wake)** — on new input or a notification to that agent: respawn
+   the worker, replay the checkpoint, resume where it waited.
+
+Invariants: offload only in a wait state — never mid-tool-call or mid-turn;
+restore is idempotent (checkpoint replay is re-runnable).
+
+### 7.3 Dormant TUI (focus-aware rendering)
+
+Prerequisite-gated scope: **unbounded TUI count ships only if the renderer can
+go dormant when unfocused** (`focusDormant=true`).
+
+- **Trigger:** window/tab loses focus (kitty focus events) OR renderer idle >
+  `dormantMs` (2s default) with no visible change.
+- **Dormant:** render loop stops (no repaint, no diff), timer callbacks
+  suspend, panel refresh intervals stop. Process stays alive at ~0 CPU.
+- **Metric:** dormant TUI average CPU < 0.1% over 10s. If a platform cannot
+  meet it, TUIs are capped there (fallback fixed cap, e.g. 4).
+- **Wake:** focus event, or an agent notification (→ §7.4).
+
+### 7.4 Tab-flash notification
+
+Even a dormant/unfocused agent can notify:
+
+- Agent message / notif event → flash the terminal tab: background = soul
+  accent, high-contrast text, ~2s flash, decay to normal. Distinct from the
+  notif-box.
+- Transport: kitty control socket (same discovery as notif-box §4),
+  `set-tab-title`/`set-tab-color` + a restore timer.
+- The flash is terminal-level, NOT a TUI repaint — it must not wake the
+  renderer into a full redraw. The flash is the only visible cost of an
+  unfocused agent.
+
+### 7.5 Proactive reaping (native)
+
+- On `agent_end` / run completion: reap immediately — collect output, append
+  to `runs.jsonl`, release the worker; drop the checkpoint if done, keep it
+  only if offloadable-wait.
+- Zombie guard: every governor tick (30s), scan for finished-but-unreaped
+  subagents; reap anything terminal for > `reapGraceMs` (60s default) or whose
+  parent is gone.
+- Houseguest rule #1 for fleets: no orphans, no zombies, no checkpoint litter.
+
+### 7.6 Config (`[fleet]` in ompr.toml)
+
+```toml
+[fleet]
+maxSubagents  = 15
+offloadSleepMs = 30000
+dormantMs     = 2000
+focusDormant  = true      # prerequisite gate for unbounded TUIs (§7.3)
+reapGraceMs   = 60000
+```
+
+---
+
+## 8. CLI contract (ompa)
 
 ```
 ompa install            link enabled plugins (from ompr.toml §plugins)
@@ -278,13 +370,15 @@ ompa disable <p>        unlink one plugin
 ompa theme <name>       apply theme (cp2077 | rebecca)
 ompa prune              remove souls whose sessions are dead (reserved safe)
 ompa status             plugins on/off, theme, souls
+ompa fleet              fleet governor: running X/15, queued Y, offloaded Z
+ompa fleet reap --all   force-reap finished subagents (zombie guard bypass)
 ompa --version          print version
 ```
 Exit codes: 0 ok, 1 user error, 2 unknown plugin/theme.
 
 ---
 
-## 8. Invariants (regression guards)
+## 9. Invariants (regression guards)
 
 1. The guard never blocks a tool call longer than `maxHoldMs`.
 2. `:name:` parsing uses `indexOf(":", 1)`; never bare `split(":")`.
@@ -298,15 +392,23 @@ Exit codes: 0 ok, 1 user error, 2 unknown plugin/theme.
 8. Auto-capture never writes for unclaimed/test sessions (name = "agent").
 9. Any action that changes the user's machine state must be visible: logged,
    notified, or both (houseguest rule #1).
+10. At most `maxSubagents` live subagents, ever; offloaded/done never hold a
+    slot. At the cap, spawn requests queue and wait — priority orders the
+    queue, never bypasses the cap.
+11. Offload happens only in a wait state — never mid-tool-call or mid-turn.
+12. Unbounded TUIs require `focusDormant=true`; a dormant TUI's avg CPU is
+    < 0.1% (10s window), else TUIs fall back to a fixed cap.
+13. Fleet checkpoint writes are atomic (temp + rename); restore replays
+    idempotently.
 
 ---
 
-## 9. Milestone mapping
+## 10. Milestone mapping
 
 | Milestone | Build contract | Done? |
 |-----------|---------------|-------|
 | M1 framework | repo, CLI, config, 5 plugins, 2 themes, license, CI | ✅ |
-| M2 souls | vault + commands + injection + auto-capture; backend eval | ⏳ (this file) |
-| M3 sitter | §6 telemetry + ladder + loop; telemetry history; theme previews | — |
+| M2 souls+fleet-v1 | vault + commands + injection + auto-capture; backend eval; fleet cap/queue + proactive reaping | ⏳ |
+| M3 sitter+fleet-v2 | §6 telemetry + ladder + loop; telemetry history; theme previews; fleet offload-on-wait + focus-dormant TUIs + tab-flash notify | — |
 | M4 one-command | fresh-machine installer; multi-harness (gated) | — |
 | M5 launch | OSS release; product tier separation (free core / paid sitter) | — |

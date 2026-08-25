@@ -37,6 +37,10 @@ The north star, in order of ambition:
    itself. Trust, false positives, disclosure ethics, and 24/7 model cost make
    this the ceiling, not the plan — see SPEC.md §"Far Horizon".
 
+7. **A fleet that behaves like one guest.** Cap, queue, offload, reap — a
+   hundred subagents cost what one should, because the governor treats the
+   fleet the way the houseguest rules treat the agent.
+
 ## Future implementation
 
 ### Near-term (M2) — souls + fabric
@@ -45,6 +49,8 @@ The north star, in order of ambition:
   familiarity that compounds instead of resetting each run.
 - **Fabric** gets rooms and routing polish: `::` broadcast, `:name:` direct
   routing to the most-familiar soul.
+- **Fleet v1** — the subagent cap (15 live, ever) with a priority wait queue,
+  and proactive reaping of finished subagents as a native governor behavior.
 
 ### Mid-term (M3) — governor + theme
 
@@ -53,6 +59,10 @@ The north star, in order of ambition:
   prediction.
 - **Theme engine** gets live previews, per-soul accents, Hyprland rules, and
   the notification box as a first-class panel.
+- **Fleet v2** — wait-state offload (run in background until the agent waits,
+  then checkpoint + release memory, restore on wake), focus-dormant TUIs
+  (unbounded count only when the renderer sleeps unfocused), and tab-flash
+  notifications from real agents in the soul's high-contrast accent.
 - **Refine revenue/packaging** — direction is decided (product; see SPEC.md §Direction). Exact pricing and packaging land with a working M2.
 
 ### Longer-term (M4–M5) — distribution

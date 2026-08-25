@@ -97,17 +97,24 @@ cmd_version() {
 
 cmd_prune() {
   # remove souls whose session is no longer live; protect reserved identities
-  local RESERVED="reaper crypt shovel"
-  local live_ids
-  live_ids=$(prime-agent list --json 2>/dev/null | grep -oE '"sessionId": "[^"]+"|"id": "[a-f0-9]{12}"' | sed 's/.*: "//;s/"//')
+  local RESERVED
+  RESERVED="reaper crypt shovel $(toml_get souls reserved "$CONF" 2>/dev/null | tr -d '[]" ')"
+  # set -e + `local x=$(failing)` = silent exit; separate declaration from assignment
+  local live_ids=""
+  live_ids=$(prime-agent list --json 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const s=JSON.parse(d);const ids=new Set();for(const x of s.sessions||[]){if(x.sessionId)ids.add(x.sessionId);if(x.id)ids.add(x.id);}process.stdout.write([...ids].join("\n"));}catch{process.exit(1);}})' 2>/dev/null || true)
+  # F4: never prune on a failed registry read — empty live list would nuke everything
+  if [[ -z "$live_ids" ]]; then
+    err "prime-agent list failed/empty — aborting prune (no data loss)"
+    return 1
+  fi
   local n=0
   for f in "$HOME/.prime/agent/souls"/*.soul.md; do
     [[ -f "$f" ]] || continue
     local name
     name=$(basename "$f" .soul.md)
     if echo "$RESERVED" | grep -qw "$name"; then continue; fi
-    local sid
-    sid=$(grep -m1 -E '^(session|session_id|sessionId):' "$f" | sed 's/^[^:]*: *//')
+    local sid=""
+    sid=$(grep -m1 -E '^(session|session_id|sessionId):' "$f" | sed 's/^[^:]*: *//' || true)
     [[ -z "$sid" ]] && continue
     if ! echo "$live_ids" | grep -qx "$sid"; then
       rm -f "$f" "$HOME/.prime/agent/souls/$name.memory.jsonl"
