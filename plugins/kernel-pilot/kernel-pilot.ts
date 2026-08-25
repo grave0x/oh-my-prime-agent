@@ -125,10 +125,22 @@ const STATEFUL_MARKERS: RegExp[] = [
 ];
 
 /** Pure heuristic: does this cell need the stateful kernel? Conservative. */
+/** Strip string/template literals and comments before marker matching, so
+ * pure code that merely mentions stateful machinery in text still runs
+ * stateless. Imports, magics, and top-level awaits are still caught. */
+function stripLiterals(code: string): string {
+  return code
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\/[^\n]*/g, "")
+    .replace(/'(?:[^'\\\n]|\\.)*'/g, "")
+    .replace(/"(?:[^"\\\n]|\\.)*"/g, "")
+    .replace(/`(?:[^`\\]|\\.)*`/g, "");
+}
+
 export function classifyKernelMode(code: string): KernelMode {
   if (!code || !code.trim()) return "stateless";
   for (const re of STATEFUL_MARKERS) {
-    if (re.test(code)) return "stateful";
+    if (re.test(stripLiterals(code))) return "stateful";
   }
   return "stateless";
 }
@@ -339,6 +351,17 @@ export default function kernelPilot(pi: ExtensionAPI): void {
     return baseTool ??= getBaseIpython(s || sid);
   };
 
+  // The prime patch (bin/apply-kernel-pilot-patch.py) sets
+  // globalThis.__ompaKernelPilotLive at MODULE IMPORT (once per process) and
+  // exposes the base tools per session inside _buildRuntime. Extensions load
+  // BEFORE _buildRuntime, so the live marker is the only reliable signal:
+  //   - fresh process with patch: marker true -> register the router; the
+  //     per-session base map exists by the time any tool call runs.
+  //   - old process after reload: module cached -> marker undefined -> stay
+  //     additive (py tool only); the built-in ipython tool stays intact.
+  // A restart is required to activate the router.
+  const pilotLive = !!(globalThis as any).__ompaKernelPilotLive;
+
   // ---- stateless `py` tool (always additive) --------------------------
   pi.registerTool(defineTool({
     name: "py",
@@ -366,40 +389,39 @@ export default function kernelPilot(pi: ExtensionAPI): void {
     },
   }));
 
-  // ---- ipython router override (only when the prime patch is present) --
-  pi.registerTool(defineTool({
-    name: "ipython",
-    label: "ipython (kernel-pilot)",
-    description: "Execute Python scratchpad code and `%%bash` shell cells in a persistent IPython kernel. Variables, imports, and loaded data persist across calls, and are revived on a best-effort basis when a session is resumed. In auto backend mode, stateless code is routed to the lightweight `py` runner automatically; stateful code (rlm, skills, magics, await, %%bash) runs in the kernel.",
-    promptSnippet: "ipython - persistent agent notebook for Python scratchpad code and %%bash orchestration",
-    promptGuidelines: [
-      "Use `py` for pure stateless computation; keep `ipython` for stateful work.",
-    ],
-    parameters: Type.Object({ code: Type.String() }),
-    executionMode: "sequential",
-    execute: async (toolCallId: string, params: { code: string }, signal: AbortSignal | undefined, onUpdate: any, ctx: ExtensionContext) => {
-      const base = resolveBase(ctx);
-      const mode = classifyKernelMode(params.code);
-      if (backend === "stateful" || (backend === "auto" && mode === "stateful") || !base) {
-        // stateful path: delegate to the real provisioner + RLM bridge
-        const started = Date.now();
-        if (base) {
+  // ---- ipython router override (only when the patch is live in THIS process)
+  if (pilotLive) {
+    pi.registerTool(defineTool({
+      name: "ipython",
+      label: "ipython (kernel-pilot)",
+      description: "Execute Python scratchpad code and `%%bash` shell cells in a persistent IPython kernel. Variables, imports, and loaded data persist across calls, and are revived on a best-effort basis when a session is resumed. In auto backend mode, stateless code is routed to the lightweight `py` runner automatically; stateful code (rlm, skills, magics, await, %%bash) runs in the kernel.",
+      promptSnippet: "ipython - persistent agent notebook for Python scratchpad code and %%bash orchestration",
+      promptGuidelines: [
+        "Use `py` for pure stateless computation; keep `ipython` for stateful work.",
+      ],
+      parameters: Type.Object({ code: Type.String() }),
+      executionMode: "sequential",
+      execute: async (toolCallId: string, params: { code: string }, signal: AbortSignal | undefined, onUpdate: any, ctx: ExtensionContext) => {
+        const base = resolveBase(ctx);
+        const mode = classifyKernelMode(params.code);
+        if (!base) {
+          return {
+            content: [{ type: "text", text: "kernel-pilot lost the base ipython handle; restart prime-agent to restore the router." }],
+            details: { status: "error" },
+          };
+        }
+        if (backend === "stateful" || (backend === "auto" && mode === "stateful")) {
+          const started = Date.now();
           const r = await base.execute(toolCallId, params, signal, onUpdate, ctx);
           recordStat({ tool: "ipython", mode, durationMs: Date.now() - started, ok: r?.details?.status !== "error" });
           return r;
         }
-        // no patch: tell the model clearly
-        return {
-          content: [{ type: "text", text: "The kernel-pilot prime patch is not applied; the ipython tool is unavailable in this session. Run `ompa kernel-pilot patch` (or bin/apply-kernel-pilot-patch.py) and /reload." }],
-          details: { status: "error" },
-        };
-      }
-      // stateless path: run in the light runner, but with ipython's identity
-      const r = await runStatelessPython(params.code, { cwd: ctx.cwd, timeoutMs: cfg.timeoutMs, maxOutputChars: cfg.maxOutputChars, signal });
-      recordStat({ tool: "ipython", mode, durationMs: r.durationMs, ok: r.status === "ok" });
-      return renderStatelessResult(r, mode, backend, cfg.maxOutputChars);
-    },
-  }));
+        const r = await runStatelessPython(params.code, { cwd: ctx.cwd, timeoutMs: cfg.timeoutMs, maxOutputChars: cfg.maxOutputChars, signal });
+        recordStat({ tool: "ipython", mode, durationMs: r.durationMs, ok: r.status === "ok" });
+        return renderStatelessResult(r, mode, backend, cfg.maxOutputChars);
+      },
+    }));
+  }
 
   // ---- backend guidance per turn --------------------------------------
   pi.on("before_agent_start", async (event: any, _ctx: ExtensionContext) => {
@@ -432,7 +454,8 @@ export default function kernelPilot(pi: ExtensionAPI): void {
       ctx.ui.notify(
         [
           `backend: ${backend} (config default: ${cfg.backend})`,
-          `prime patch: ${base ? "applied" : "NOT applied (additive mode — no ipython router)"}`,
+          `patch live: ${pilotLive ? "yes" : "no (additive mode - no ipython router until prime-agent restarts)"}`,
+          `router: ${base ? "active" : "inactive"}`,
           `stats: py=${s.py} ipython=${s.ipython} errors=${s.errors} byMode=${JSON.stringify(s.byMode)}`,
           `runner: ${resolveKernelPython()}`,
           "swap: /kernel auto|stateless|stateful",

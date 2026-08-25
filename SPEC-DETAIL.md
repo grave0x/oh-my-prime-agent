@@ -575,14 +575,19 @@ Pure code with a trailing top-level expression is echoed notebook-style
 
 - **`py` tool (always additive):** a new stateless tool the model can pick for
   pure work. Stateful-looking code gets a guidance error ("use ipython").
-- **`ipython` router (patch-gated):** when `bin/apply-kernel-pilot-patch.py`
-  is applied, the session's base tool definitions are exposed at
-  `globalThis.__ompaKernelPilot[sessionId]` (per-session, replaced on reload),
-  and the plugin overrides the built-in `ipython` tool (extension tools win
-  over built-ins in `_refreshToolRegistry`): `auto` classifies per call,
-  `stateful` always delegates to the base tool (real provisioner + RLM bridge
-  + snapshots + busy-kernel UX + attachments), `stateless` always runs the
-  runner. Without the patch the plugin degrades to additive mode.
+- **`ipython` router (patch-gated):** the patch sets
+  `globalThis.__ompaKernelPilotLive` at module import (once per process) and
+  exposes the session's base tool definitions at
+  `globalThis.__ompaKernelPilot[sessionId]` (per-session, replaced on
+  rebuild). The plugin registers the router only when the live marker is
+  present — a fresh patched process activates it; a `/reload` in an old
+  process (cached module) stays additive and the built-in `ipython` tool is
+  untouched. The router (extension tools win over built-ins in
+  `_refreshToolRegistry`): `auto` classifies per call, `stateful` always
+  delegates to the base tool (real provisioner + RLM bridge + snapshots +
+  busy-kernel UX + attachments), `stateless` always runs the runner. Without
+  the patch the plugin degrades to additive mode. A restart is required to
+  activate the router after patching.
 
 ### 11.3 Surface & commands
 
