@@ -1,20 +1,76 @@
 name: release
 
+# Fork release pipeline: bundle oh-my-prime-agent into self-extracting
+# `ompa-<platform>` launchers on every `v*` tag and publish them (plus
+# SHA256SUMS) as release assets for the Grave-Inc/universal-pkg-repo
+# packaging pipeline to consume (same contract as Grave-Inc/oh-my-pi).
+#
+# The launcher template lives at packaging/launcher.sh; the workflow appends
+# the repo bundle as a tar.gz payload after its last line (makeself style).
+
 on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  release:
+  bundle:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Build self-extracting launchers
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          tar -czf dist/payload.tgz \
+            bin plugins ompr.toml README.md LICENSE packaging/launcher.sh
+          # SKIP is a line count, invariant under the @SKIP@ substitution:
+          # payload = everything after the launcher's last line.
+          SKIP=$(( $(wc -l < packaging/launcher.sh) + 1 ))
+          sed "s/@SKIP@/$SKIP/" packaging/launcher.sh > dist/launcher.sh
+          for t in linux-x64 linux-arm64 darwin-x64 darwin-arm64; do
+            cat dist/launcher.sh dist/payload.tgz > "dist/ompa-$t"
+          done
+          cat dist/launcher.sh dist/payload.tgz > dist/ompa-windows-x64.exe
+          chmod +x dist/ompa-*
+          rm -f dist/launcher.sh dist/payload.tgz
+
+      - name: Smoke test launcher (extract + version in sandbox HOME)
+        run: |
+          set -euo pipefail
+          SANDBOX="$(mktemp -d)"
+          HOME="$SANDBOX" ./dist/ompa-linux-x64 version
+          test -x "$SANDBOX/.prime/oh-my-prime-agent/bin/ompa"
+          echo "launcher OK"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ompa-bundles
+          path: dist/ompa-*
+
+  release:
+    needs: [bundle]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ompa-bundles
+          path: dist
+
+      - name: Generate checksums
+        run: cd dist && sha256sum ompa-* > SHA256SUMS
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          files: |
+            dist/ompa-*
+            dist/SHA256SUMS
           generate_release_notes: true
           make_latest: true

@@ -1,6 +1,6 @@
 # oh-my-prime-agent config (alias: ompa)
 [package]
-version = "0.2.0"
+version = "0.2.1"
 
 [resource]
 maxLoad1 = 9           # 75% of 12 cores
