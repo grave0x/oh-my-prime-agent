@@ -21,6 +21,7 @@
 │   ├── bash-first/
 │   └── fleet/
 ├── completions/                   shell completions (ompa.fish, omp.fish)
+├── tests/test-ompa.sh             anti-slop CLI harness (mock registry, sandboxed HOME)
 └── themes/<name>/                 kitty-tab-bar.py + soul-accents + hypr rules
 
 ~/.prime/agent/extensions/         symlink targets (ompa install)
@@ -419,6 +420,8 @@ ompa fleet              fleet governor: running X/15, queued Y, offloaded Z
 ompa fleet reap --all   force-reap finished subagents (zombie guard bypass)
 ompa sync               write resource-policy.json from ompr.toml (single source)
 ompa gc                 run hygiene GC now (artifacts/transcripts > maxAgeDays)
+ompa reap               kill idle omp/pi background workers (auto-cleanup)
+ompa enable-reap        wire the 5-min systemd user timer (auto; also on install)
 ompa completions        install shell completions (fish; auto-run on install)
 ompa --version          print version
 ```

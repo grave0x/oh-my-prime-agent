@@ -1,0 +1,12 @@
+[Unit]
+Description=ompa reap timer — every 5 min
+Documentation=https://github.com/grave0x/oh-my-prime-agent
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+Unit=ompa-reap.service
+
+[Install]
+WantedBy=timers.target

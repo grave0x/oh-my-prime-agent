@@ -9,12 +9,17 @@ CONF="$ROOT/ompr.toml"
 say() { printf '\033[38;2;252;238;10m[ompa]\033[0m %s\n' "$*"; }
 err() { printf '\033[38;2;255;42;109m[ompa]\033[0m %s\n' "$*" >&2; }
 
-# tiny toml get: ompa-toml-get section key [file]
+# tiny toml get: ompa-toml-get section key [file]  (strips inline # comments)
 toml_get() {
-  local sec="$1" key="$2" file="$3" in_sec=0
+  local sec="$1" key="$2" file="$3" in_sec=0 val
   while IFS= read -r line; do
     [[ "$line" =~ ^[[:space:]]*\[(.*)\][[:space:]]*$ ]] && { [[ "${BASH_REMATCH[1]}" == "$sec" ]] && in_sec=1 || in_sec=0; continue; }
-    [[ $in_sec == 1 && "$line" =~ ^[[:space:]]*$key[[:space:]]*=[[:space:]]*(.*)$ ]] && { echo "${BASH_REMATCH[1]}"; return 0; }
+    if [[ $in_sec == 1 && "$line" =~ ^[[:space:]]*$key[[:space:]]*=[[:space:]]*(.*)$ ]]; then
+      val="${BASH_REMATCH[1]}"
+      val="${val%%\#*}"   # strip inline comment (values in this config never contain '#')
+      echo "$val"
+      return 0
+    fi
   done < "$file"
   return 1
 }
@@ -57,6 +62,10 @@ cmd_install() {
   # auto-configure shell completions (auto config of auto completions)
   if command -v fish >/dev/null 2>&1; then
     cmd_completions fish
+  fi
+  # auto-wire the sub-agent process cleanup timer
+  if command -v systemctl >/dev/null 2>&1; then
+    cmd_enable_reap >/dev/null 2>&1 || true
   fi
   say "done. /reload in the TUI to activate."
 }
@@ -129,6 +138,220 @@ cmd_prune() {
   say "prune done ($n removed)"
 }
 
+cmd_sync() {
+  # Single source of truth (invariant #14): ompr.toml [resource] numbers win;
+  # array-valued fields (heavyPatterns/tools/perProject) come from ompr.toml
+  # when present, else are preserved from the existing policy file. Backs up
+  # the old policy, writes atomically. Never hand-edit resource-policy.json.
+  local POLICY="$HOME/.prime/agent/resource-policy.json"
+  mkdir -p "$(dirname "$POLICY")"
+  local BAK="$POLICY.bak-ompa"
+  [[ -f "$POLICY" ]] && cp -a "$POLICY" "$BAK"
+  local maxLoad1 minMemAvailMB maxSwapUsedMB pollMs maxHoldMs maxJobs niceLevel ioClass
+  maxLoad1=$(toml_get resource maxLoad1 "$CONF" 2>/dev/null) || maxLoad1=9
+  minMemAvailMB=$(toml_get resource minMemAvailMB "$CONF" 2>/dev/null) || minMemAvailMB=1200
+  maxSwapUsedMB=$(toml_get resource maxSwapUsedMB "$CONF" 2>/dev/null) || maxSwapUsedMB=8000
+  pollMs=$(toml_get resource pollMs "$CONF" 2>/dev/null) || pollMs=1500
+  maxHoldMs=$(toml_get resource maxHoldMs "$CONF" 2>/dev/null) || maxHoldMs=240000
+  maxJobs=$(toml_get resource maxJobs "$CONF" 2>/dev/null) || maxJobs=4
+  niceLevel=$(toml_get resource niceLevel "$CONF" 2>/dev/null) || niceLevel=19
+  ioClass=$(toml_get resource ioClass "$CONF" 2>/dev/null) || ioClass=3
+  local heavyPatterns tools perProject rateLimitTurns
+  heavyPatterns=$(toml_get resource heavyPatterns "$CONF" 2>/dev/null || true)
+  tools=$(toml_get resource tools "$CONF" 2>/dev/null || true)
+  perProject=$(toml_get resource perProject "$CONF" 2>/dev/null || true)
+  rateLimitTurns=$(toml_get inject rateLimitTurns "$CONF" 2>/dev/null || true)
+  POLICY="$POLICY" BAK="$BAK" \
+    V_maxLoad1="$maxLoad1" V_minMemAvailMB="$minMemAvailMB" V_maxSwapUsedMB="$maxSwapUsedMB" \
+    V_pollMs="$pollMs" V_maxHoldMs="$maxHoldMs" V_maxJobs="$maxJobs" V_niceLevel="$niceLevel" V_ioClass="$ioClass" \
+    V_heavyPatterns="$heavyPatterns" V_tools="$tools" V_perProject="$perProject" V_rateLimitTurns="$rateLimitTurns" \
+    python3 - <<'PY'
+import json, os
+policy = os.environ["POLICY"]
+old = {}
+try:
+    old = json.load(open(os.environ.get("BAK", ""))) if os.environ.get("BAK") and os.path.exists(os.environ["BAK"]) else {}
+except Exception:
+    old = {}
+
+def num(name, default):
+    try:
+        v = os.environ.get("V_" + name, "")
+        return int(float(v)) if v else default
+    except Exception:
+        return default
+
+def arr(name, default):
+    v = os.environ.get("V_" + name, "")
+    if not v:
+        return old.get(name, default)
+    try:
+        return json.loads(v)
+    except Exception:
+        return old.get(name, default)
+
+DEFAULT_HEAVY = [
+  "\\b(cargo|rustc|make|ninja|cmake|gcc|g\\+\\+|clang|npm run build|tsc|webpack|vite build|go build|go install|gradle|mvn|bazel|jadx|apktool|pnpm build|yarn build)\\b",
+  "\\b(opt-level|codegen-units|target/release|CMAKE_BUILD_TYPE)\\b",
+  "\\b(-j\\s*\\d+|--jobs)\\b",
+]
+# perProject: ompr.toml wins when present, else preserved from the old policy
+per_proj = ""
+vpp = os.environ.get("V_perProject", "").strip()
+if vpp:
+    try:
+        per_proj = json.loads(vpp)
+    except Exception:
+        per_proj = old.get("perProject") or {}
+else:
+    per_proj = old.get("perProject") or {}
+policy = {
+    "maxLoad1": num("maxLoad1", 9),
+    "minMemAvailMB": num("minMemAvailMB", 1200),
+    "maxSwapUsedMB": num("maxSwapUsedMB", 8000),
+    "pollMs": num("pollMs", 1500),
+    "maxHoldMs": num("maxHoldMs", 240000),
+    "heavyPatterns": arr("heavyPatterns", DEFAULT_HEAVY),
+    "tools": arr("tools", ["bash", "ipython"]),
+    "niceLevel": num("niceLevel", 19),
+    "ioClass": num("ioClass", 3),
+    "maxJobs": num("maxJobs", 4),
+    "injectRateLimitTurns": num("rateLimitTurns", 10),
+}
+if per_proj:
+    policy["perProject"] = per_proj
+path = os.environ["POLICY"]
+tmp = path + ".tmp"
+open(tmp, "w").write(json.dumps(policy, indent=2) + "\n")
+os.replace(tmp, path)
+PY
+  say "resource-policy.json synced from ompr.toml [resource] (single source)"
+}
+
+cmd_gc() {
+  # Hygiene GC (houseguest rule #3 / OPTIMIZE.md S3+S6): remove dead-session
+  # artifacts+transcripts older than artifactMaxAgeDays; rotate state files at
+  # logMaxMB. Live sessions are NEVER touched. F4-safe: abort if the registry
+  # read fails or returns empty.
+  local ARTIFACT_MAX LOG_MAX_MB
+  ARTIFACT_MAX=$(toml_get hygiene artifactMaxAgeDays "$CONF" 2>/dev/null | tr -d '"') || true
+  [[ -n "$ARTIFACT_MAX" ]] || ARTIFACT_MAX=14
+  LOG_MAX_MB=$(toml_get hygiene logMaxMB "$CONF" 2>/dev/null | tr -d '"') || true
+  [[ -n "$LOG_MAX_MB" ]] || LOG_MAX_MB=8
+
+  local live_ids=""
+  live_ids=$(prime-agent list --json 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const s=JSON.parse(d);const ids=new Set();for(const x of s.sessions||[]){if(x.sessionId)ids.add(x.sessionId);if(x.id)ids.add(x.id);}process.stdout.write([...ids].join("\n"));}catch{process.exit(1);}})' 2>/dev/null || true)
+  if [[ -z "$live_ids" ]]; then
+    err "prime-agent list failed/empty — aborting gc (no data loss)"
+    return 1
+  fi
+
+  local now removed=0
+  now=$(date +%s)
+  # dead-session artifacts (dirs named by session id; UUID-shaped only)
+  local uuid_re='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+  for d in "$HOME/.prime/agent/session-artifacts"/*/; do
+    [[ -d "$d" ]] || continue
+    local sid
+    sid=$(basename "$d")
+    [[ "$sid" =~ $uuid_re ]] || continue
+    echo "$live_ids" | grep -qx "$sid" && continue
+    local age age_d
+    age=$(stat -c %Y "$d" 2>/dev/null) || continue
+    age_d=$(( (now - age) / 86400 ))
+    [[ $age_d -ge $ARTIFACT_MAX ]] || continue
+    rm -rf "$d"
+    removed=$((removed+1))
+  done
+  # dead-session transcripts (<uuid>.jsonl; UUID-shaped only)
+  for f in "$HOME/.prime/agent/sessions"/*.jsonl; do
+    [[ -f "$f" ]] || continue
+    local sid
+    sid=$(basename "$f" .jsonl)
+    [[ "$sid" =~ $uuid_re ]] || continue
+    echo "$live_ids" | grep -qx "$sid" && continue
+    local age age_d
+    age=$(stat -c %Y "$f" 2>/dev/null) || continue
+    age_d=$(( (now - age) / 86400 ))
+    [[ $age_d -ge $ARTIFACT_MAX ]] || continue
+    rm -f "$f"
+    removed=$((removed+1))
+  done
+  # state-file rotation at logMaxMB (keep newest half of lines)
+  local sf
+  for sf in \
+    "$HOME/.local/state/resource-guard/usage.jsonl" \
+    "$HOME/.local/state/agent-chat/chat.jsonl" \
+    "$HOME/.local/state/terminal-notif/notif.log" \
+    "$HOME/.local/state/fleet/runs.jsonl"; do
+    [[ -f "$sf" ]] || continue
+    local size_mb=$(( $(stat -c %s "$sf") / 1048576 ))
+    [[ $size_mb -ge $LOG_MAX_MB ]] || continue
+    local lines keep
+    lines=$(wc -l < "$sf")
+    keep=$(( lines / 2 ))
+    [[ $keep -lt 1 ]] && keep=1
+    tail -n "$keep" "$sf" > "$sf.tmp" && mv "$sf.tmp" "$sf"
+    say "rotated $sf (>${LOG_MAX_MB}MB)"
+  done
+  say "gc done ($removed dead-session artifacts/transcripts removed)"
+}
+
+cmd_reap() {
+  # Auto cleanup of omp/pi sub-agent processes (fleet §7.5 + [inference], OPTIMIZE.md S1/S2).
+  # Safe by construction: kills ONLY omp background workers that are (a) running
+  # longer than [inference] idleTimeoutMs AND (b) provably idle (CPU ticks
+  # unchanged across a 3s sample). Sessions, the daemon broker, and busy workers
+  # are never touched. Zombies are reported, not killed (their parent reaps them).
+  local IDLE_MS
+  IDLE_MS=$(toml_get inference idleTimeoutMs "$CONF" 2>/dev/null | tr -d '"') || true
+  [[ -n "$IDLE_MS" ]] || IDLE_MS=120000
+  local REAP_LOG="$HOME/.local/state/fleet/reap.log"
+  mkdir -p "$(dirname "$REAP_LOG")"
+
+  local killed=0 zombies=0 pid
+  # 1) idle omp background workers (comm=omp; exclude the daemon broker)
+  for pid in $(pgrep -f '__omp_worker_' 2>/dev/null || true); do
+    [[ -r "/proc/$pid/comm" ]] || continue
+    [[ "$(cat /proc/$pid/comm 2>/dev/null)" == "omp" ]] || continue   # never self-match
+    local args
+    args=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null) || continue
+    case "$args" in *__omp_worker_daemon_broker*) continue ;; esac     # broker stays
+    local etime
+    etime=$(ps -o etimes= -p "$pid" 2>/dev/null | tr -d ' ') || continue
+    [[ "$etime" =~ ^[0-9]+$ ]] || continue
+    [[ $((etime * 1000)) -ge $IDLE_MS ]] || continue                   # too young
+    local t1 t2
+    t1=$(awk '{print $14+$15}' /proc/$pid/stat 2>/dev/null) || continue
+    sleep 3
+    t2=$(awk '{print $14+$15}' /proc/$pid/stat 2>/dev/null) || continue
+    [[ -n "$t1" && "$t1" == "$t2" ]] || continue                    # busy: leave it
+    if kill -TERM "$pid" 2>/dev/null; then
+      killed=$((killed+1))
+      echo "$(date -Iseconds) killed idle worker $pid ($args)" >> "$REAP_LOG"
+    fi
+  done
+  # 2) zombie agent processes — report only (parent/init reaps them)
+  local zlines
+  zlines=$(ps -eo pid=,stat=,comm= 2>/dev/null | awk '$2 ~ /^Z/ && $3 ~ /^(omp|pi|node|node-MainThread|prime-agent)$/ {print "$1:$3"}')
+  if [[ -n "$zlines" ]]; then
+    zombies=$(printf '%s\n' "$zlines" | wc -l)
+    echo "$(date -Iseconds) zombies: $(printf '%s' "$zlines" | tr '\n' ' ')" >> "$REAP_LOG"
+  fi
+  say "reap done ($killed idle workers killed, $zombies zombies reported)"
+}
+
+cmd_enable_reap() {
+  # Wire the auto-cleanup timer: ompa-reap.service + .timer every 5 min.
+  local UNIT_DIR="$HOME/.config/systemd/user"
+  mkdir -p "$UNIT_DIR"
+  cp "$ROOT/systemd/ompa-reap.service" "$UNIT_DIR/"
+  cp "$ROOT/systemd/ompa-reap.timer" "$UNIT_DIR/"
+  systemctl --user daemon-reload 2>/dev/null || { err "systemctl --user unavailable"; return 1; }
+  systemctl --user enable --now ompa-reap.timer 2>/dev/null
+  say "ompa-reap.timer enabled (every 5 min; see ~/.local/state/fleet/reap.log)"
+}
+
 cmd_completions() {
   local shell="${1:-fish}"
   case "$shell" in
@@ -156,6 +379,10 @@ ompa — oh-my-prime-agent (alias form)
   ompa status           show state
   ompa version         print version
   ompa prune           remove souls whose sessions are dead
+  ompa sync            write resource-policy.json from ompr.toml [resource]
+  ompa gc              hygiene: dead-session artifacts > maxAgeDays, log rotation
+  ompa reap            kill idle omp/pi background workers (auto-cleanup)
+  ompa enable-reap     wire the 5-min systemd user timer (auto)
   ompa completions     install shell completions (fish, auto-run on install)
   ompa help
 
@@ -171,6 +398,10 @@ case "${1:-help}" in
   theme) cmd_theme "${2:-}" ;;
   status) cmd_status ;;
   version|--version|-V) cmd_version ;;
+  sync) cmd_sync ;;
+  gc) cmd_gc ;;
+  reap) cmd_reap ;;
+  enable-reap) cmd_enable_reap ;;
   completions) cmd_completions "${2:-fish}" ;;
   help|--help|-h) cmd_help ;;
   *) cmd_help ;;

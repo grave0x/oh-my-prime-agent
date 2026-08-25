@@ -5,6 +5,15 @@
 > opinion: every number below was read off this machine, not guessed.
 > Companion to SPEC-DETAIL.md — the targets live in `ompr.toml`.
 
+> **Build status (2026-08-25):** S3/S4/S6 **BUILT** — `ompa sync`
+> (single-source config → resource-policy.json) + `ompa gc` (dead-session
+> artifacts + state-file rotation), tested by `tests/test-ompa.sh` (29 checks,
+> all passing). S5 **BUILT** — resource-guard.ts §1.8 injection rate-limit.
+> S1/S2/S7 **BUILT (v1)** — `ompa reap` auto-cleanup: provably-idle omp
+> background workers killed (idle CPU check + [inference] idleTimeoutMs),
+> zombies reported, wired as a 5-min systemd user timer (`ompa enable-reap`;
+> auto-enabled by `ompa install`). S8 pending (fleet cap/offload — kernel work).
+
 ## Surface 1 — Idle worker memory (the big one)
 
 Measured: **48 resident agent processes** (26 `omp` + 22 `prime-agent`)

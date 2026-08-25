@@ -40,6 +40,12 @@ complete -c ompa -f -n "__fish_seen_subcommand_from fleet" -a reap -d "force-rea
 complete -c ompa -f -n "__fish_seen_subcommand_from fleet; and __fish_seen_subcommand_from reap" -l all -d "reap everything (zombie guard bypass)"
 complete -c ompa -f -n "__fish_seen_subcommand_from completions" -a fish -d "fish completions"
 
+# --- top-level reap / enable-reap (auto cleanup) ---
+complete -c ompa -f -n "not __fish_seen_subcommand_from install enable disable theme status sync gc fleet reap enable-reap prune completions version help" \
+  -a reap -d "kill idle omp/pi background workers (auto-cleanup)"
+complete -c ompa -f -n "not __fish_seen_subcommand_from install enable disable theme status sync gc fleet reap enable-reap prune completions version help" \
+  -a enable-reap -d "wire the 5-min systemd user timer (auto)"
+
 # --- flags ---
 complete -c ompa -s V -l version -d "print version"
 complete -c ompa -s h -l help -d "show help"

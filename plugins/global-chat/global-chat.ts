@@ -237,7 +237,7 @@ function setKittyTabTitle(title: string): void {
   if (!pid || !winId) return;
   const runtime = process.env.XDG_RUNTIME_DIR || "/run/user/1000";
   const sock = `${runtime}/kitty-${pid}`;
-  execAsync("kitty", ["@", "--to", `unix:${sock}`, "set-tab-title", "--match", `window_id:${winId}`, title]);
+  execAsync("kitty", ["@", "--to", `unix:${sock}`, "set-tab-title", "--match", `window_id:${winId}`, title]).catch(() => { /* kitty title is best-effort */ });
 }
 
 function claimSoul(name: string, ctx: ExtensionContext): { ok: boolean; reason?: string } {
@@ -538,7 +538,7 @@ export default function globalChatExtension(pi: ExtensionAPI): void {
       const res = claimSoul(name, ctx);
       if (res.ok) {
         ctx.ui.notify(`Soul claimed: ${name.toLowerCase()}`, "success");
-        try { pi.setSessionName(name.toLowerCase()); } catch { /* optional */ }
+        pi.setSessionName(name.toLowerCase()).catch(() => { /* optional rename */ });
         setKittyTabTitle(name.toLowerCase());
       } else {
         ctx.ui.notify(res.reason || "could not claim soul", "error");
@@ -593,7 +593,7 @@ export default function globalChatExtension(pi: ExtensionAPI): void {
       const path = soulFileName(candidate);
       if (existsSync(path)) continue;
       if (claimSoul(candidate, ctx).ok) {
-        try { pi.setSessionName(candidate); } catch { /* optional */ }
+        pi.setSessionName(candidate).catch(() => { /* optional rename */ });
         setKittyTabTitle(candidate);
         try { ctx.ui.notify(`Soul: ${candidate} (claim another with /soul <name>)`, "info"); } catch { /* no UI */ }
         return;

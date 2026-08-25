@@ -226,9 +226,29 @@ export default function resourceGuard(pi: ExtensionAPI): void {
   });
 
   // ---- inject live resource context + execution guidance each turn --------
-  pi.on("before_agent_start", async (event: any, _ctx: any) => {
+  // §1.8 rate-limit (OPTIMIZE.md S5): re-inject only when the pressure state
+  // changed or INJECT_RATE_LIMIT turns elapsed (default 10 — mirrors ompr.toml
+  // [inject] rateLimitTurns). State is per session id; unchanged-pressure turns
+  // skip the injection entirely, saving tokens/context churn across 25+ agents.
+  const injectState = new Map<string, { sig: string; turns: number }>();
+  const injectRateLimit = (p as any).injectRateLimitTurns ?? 10; // mirrors ompr.toml [inject] via ompa sync
+
+  pi.on("before_agent_start", async (event: any, ctx: any) => {
+    const sid = ctx?.sessionManager?.getSessionId?.() ?? "default";
+    if (injectState.size > 500) injectState.clear(); // bounded; stale sessions churn
     const s = systemStats();
-    const pressuredNow = pressured(p);
+    // derive pressure from the SAME sample that feeds the text (no straddle)
+    const pressuredNow = s.load1 > p.maxLoad1 || s.memAvailMB < p.minMemAvailMB || s.swapUsedMB > p.maxSwapUsedMB;
+    const sig = `${pressuredNow ? "P" : "H"}:${p.maxLoad1}:${p.minMemAvailMB}:${p.maxSwapUsedMB}`;
+    const st = injectState.get(sid) ?? { sig: "", turns: 0 };
+    st.turns += 1;
+    if (st.sig === sig && st.turns < injectRateLimit) {
+      injectState.set(sid, st);
+      return undefined; // unchanged pressure within window — no re-injection
+    }
+    st.sig = sig;
+    st.turns = 0;
+    injectState.set(sid, st);
     const cores = cpus().length;
     const lines = [
       `[Resource context] ${cores} cores. load1=${s.load1.toFixed(2)} (max ${p.maxLoad1}), memAvailable=${s.memAvailMB}MB (min ${p.minMemAvailMB}), swapUsed=${s.swapUsedMB}MB (max ${p.maxSwapUsedMB}).`,

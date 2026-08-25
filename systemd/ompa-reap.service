@@ -1,0 +1,9 @@
+[Unit]
+Description=ompa reap — auto cleanup of idle omp/pi sub-agent processes
+Documentation=https://github.com/grave0x/oh-my-prime-agent
+
+[Service]
+Type=oneshot
+ExecStart=%h/.prime/oh-my-prime-agent/bin/ompa reap
+Nice=19
+IOSchedulingClass=idle
