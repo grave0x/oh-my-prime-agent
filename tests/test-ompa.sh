@@ -171,5 +171,19 @@ check "refine-prime disable removes gate"         test ! -f "$HOME/.prime/agent/
 check "refine-prime bad arg fails"                test $? -ne 0
 unset OMPA_REFINE_JS
 
+# ---------------- kernel-pilot gate ----------------
+mkdir -p "$TD/npm-kp"
+cat > "$TD/npm-kp/agent-session.js" <<'FAKE'
+export function noop() {}
+// // [ompa] kernel-pilot v1
+FAKE
+export OMPA_KERNEL_PILOT_JS="$TD/npm-kp/agent-session.js"
+
+KP_STATUS=$("$TD/ompa" kernel-pilot status 2>/dev/null || true)
+check "kernel-pilot status shows patch applied"   grep -q "patch: applied" <<< "$KP_STATUS"
+"$TD/ompa" kernel-pilot bogus >/dev/null 2>&1
+check "kernel-pilot bad arg fails"                test $? -ne 0
+unset OMPA_KERNEL_PILOT_JS
+
 echo
 if [ "$fail" -eq 0 ]; then echo "ALL TESTS PASSED"; else echo "TEST FAILURES: $fail"; exit 1; fi

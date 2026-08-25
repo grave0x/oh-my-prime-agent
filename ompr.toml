@@ -31,8 +31,14 @@ runGcOnTick = true       # native governor tick, not a manual command
 [inject]
 rateLimitTurns = 10      # resource context re-injected only on pressure change or every N turns
 
+[kernel]
+backend = "auto"          # auto | stateless | stateful (hot-swap: /kernel <mode>)
+timeoutMs = 120000        # stateless runner timeout
+maxOutputChars = 65536    # stdout/stderr cap per call
+guidance = true           # inject backend choice guidance per turn
+
 [plugins]
-enabled = ["resource-guard", "global-chat", "souls", "notif-box", "bash-first", "self-profiler", "ompa-tui"]
+enabled = ["resource-guard", "global-chat", "souls", "notif-box", "bash-first", "self-profiler", "ompa-tui", "kernel-pilot"]
 
 [tui]
 panels = ["resource", "chat", "notifs", "souls", "fleet", "profile", "help"]  # dashboard panels, in order

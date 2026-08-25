@@ -150,5 +150,12 @@ SPEC), project-familiarity→memory cross-links, `/recall` UI polish.
   refine apply loop (write/delete on the allowlisted user surface only, atomic
   + backup + journal), gated by `ompa refine-prime enable|disable|status`.
   Verified: prime write/delete/deny/gate-off all behave in a live Node test.
-- **Tests**: `tests/test-ompa.sh` now 36 checks (sync/gc/prune-safe +
-  refine-prime gate), all passing.
+- **kernel-pilot shipped** (SPEC-DETAIL §11): hot-swappable execution
+  backends. Additive `py` tool (stateless runner: fresh subprocess per call
+  from the kernel venv, nice, timeout, output caps, notebook-style last-expr
+  echo) + `ipython` router when the tiny patch is applied — `auto` classifies
+  each call (rlm/skills/magics/await → kernel; pure → runner), `stateful` and
+  `stateless` force a backend, `/kernel` hot-swaps live. Verified: classifier
+  8/8, runner echo/print/error paths, registration.
+- **Tests**: `tests/test-ompa.sh` now 38 checks (sync/gc/prune-safe +
+  refine-prime + kernel-pilot), all passing.

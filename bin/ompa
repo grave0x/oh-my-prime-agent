@@ -67,6 +67,9 @@ cmd_install() {
   if command -v systemctl >/dev/null 2>&1; then
     cmd_enable_reap >/dev/null 2>&1 || true
   fi
+  if ! grep -q '\[ompa\] kernel-pilot v1' "$HOME/.npm-global/lib/node_modules/prime-agent/dist/core/agent-session.js" 2>/dev/null; then
+    say 'kernel-pilot: run `ompa kernel-pilot patch` to enable the stateless ipython router'
+  fi
   say "done. /reload in the TUI to activate."
 }
 
@@ -421,6 +424,35 @@ cmd_refine_prime() {
   esac
 }
 
+cmd_kernel_pilot() {
+  # Hot-swappable ipython backends (kernel-pilot plugin): apply/remove the tiny
+  # prime patch that exposes each session's base tool definitions, so the
+  # plugin can route stateless python calls to a light runner and delegate
+  # stateful calls to the real kernel + RLM bridge.
+  local JS="${OMPA_KERNEL_PILOT_JS:-$HOME/.npm-global/lib/node_modules/prime-agent/dist/core/agent-session.js}"
+  case "${1:-status}" in
+    patch)
+      python3 "$ROOT/bin/apply-kernel-pilot-patch.py" || { err "kernel-pilot patch failed"; return 1; }
+      say "kernel-pilot patch applied — /reload to activate the ipython router"
+      ;;
+    unpatch)
+      python3 "$ROOT/bin/apply-kernel-pilot-patch.py" --remove || { err "unpatch failed"; return 1; }
+      say "kernel-pilot patch removed — /reload to deactivate"
+      ;;
+    status)
+      if grep -q '\[ompa\] kernel-pilot v1' "$JS" 2>/dev/null; then
+        echo "patch: applied"
+      else
+        echo "patch: NOT applied (run: ompa kernel-pilot patch)"
+      fi
+      ;;
+    *)
+      err "usage: ompa kernel-pilot patch|unpatch|status"
+      return 1
+      ;;
+  esac
+}
+
 cmd_help() {
   cat <<EOF
 ompa — oh-my-prime-agent (alias form)
@@ -438,6 +470,7 @@ ompa — oh-my-prime-agent (alias form)
   ompa enable-reap     wire the 5-min systemd user timer (auto)
   ompa completions     install shell completions (fish, auto-run on install)
   ompa refine-prime   gate /refine prime-modification access (enable|disable|status)
+  ompa kernel-pilot   hot-swap ipython backends (patch|unpatch|status)
   ompa help
 
 Config: $CONF
@@ -458,6 +491,7 @@ case "${1:-help}" in
   enable-reap) cmd_enable_reap ;;
   completions) cmd_completions "${2:-fish}" ;;
   refine-prime) cmd_refine_prime "${2:-status}" ;;
+  kernel-pilot) cmd_kernel_pilot "${2:-status}" ;;
   help|--help|-h) cmd_help ;;
   *) cmd_help ;;
 esac

@@ -21,6 +21,7 @@
 │   ├── bash-first/
 │   ├── self-profiler/             §9 — in-session profiler feeding /refine
 │   ├── ompa-tui/                  §8 — modular panel dashboard + status widget
+│   ├── kernel-pilot/              §11 — stateless py runner + ipython router
 │   └── fleet/
 ├── completions/                   shell completions (ompa.fish, omp.fish)
 ├── tests/test-ompa.sh             anti-slop CLI harness (mock registry, sandboxed HOME)
@@ -37,6 +38,7 @@
 ~/.local/state/ompa/profile.jsonl          # §9 profiler event log (rotated)
 ~/.local/state/ompa/profile-distilled.json # §9 compact aggregate for /refine + TUI
 ~/.local/state/ompa/refine-prime.jsonl     # §10 audit journal of applied prime edits
+~/.local/state/ompa/kernel-pilot.jsonl     # §11 backend routing stats (py/ipython, mode, ms, ok)
 ~/.prime/agent/refine-prime-enabled        # §10 gate: prime edits allowed (ompa refine-prime)
 ~/.prime/agent/resource-policy.json  # GOVERNED: written by `ompa sync` (never hand-edited)
 ```
@@ -545,7 +547,62 @@ gate file is authoritative.
 
 ---
 
-## 11. CLI contract (ompa)
+## 11. kernel-pilot (hot-swappable execution backends)
+
+**Job:** most ipython calls are pure computation — no rlm, no skills, no
+persistent variables, no magics, no await. Serve those with a lightweight
+stateless runner; keep the stateful kernel for the calls that actually need
+it. The kernel is already lazy (never started until the first ipython call),
+so stateless-only sessions never pay its ~500 MB RSS (OPTIMIZE.md S1).
+
+### 11.1 Backends
+
+| backend | what runs the code | state | rlm/skills | magics/await/%%bash |
+|---|---|---|---|---|
+| `stateful` | the session's IPython kernel (KernelManager) | persistent + snapshot | yes | yes |
+| `stateless` | fresh `python3 -` subprocess per call (kernel venv, nice 19, timeout, output caps) | none | no | no |
+| `auto` (default) | classifier routes each call | — | — | — |
+
+`classifyKernelMode` is a conservative static heuristic: any of `rlm`, skill
+module imports (agent_email, websearch, task_manager, refine, compact, edit,
+goal, terminal_notif, agent_message, agent_observe, attach_image,
+rlm_heartbeat, auto_learn), `%%`/`%` magics, `get_ipython()`, `In[`/`Out[`,
+top-level `await`, `input(`, `!` shell escapes, or `_ipython` → `stateful`.
+Pure code with a trailing top-level expression is echoed notebook-style
+(`print(repr(...))` via an AST wrapper).
+
+### 11.2 Additive + hot-swap
+
+- **`py` tool (always additive):** a new stateless tool the model can pick for
+  pure work. Stateful-looking code gets a guidance error ("use ipython").
+- **`ipython` router (patch-gated):** when `bin/apply-kernel-pilot-patch.py`
+  is applied, the session's base tool definitions are exposed at
+  `globalThis.__ompaKernelPilot[sessionId]` (per-session, replaced on reload),
+  and the plugin overrides the built-in `ipython` tool (extension tools win
+  over built-ins in `_refreshToolRegistry`): `auto` classifies per call,
+  `stateful` always delegates to the base tool (real provisioner + RLM bridge
+  + snapshots + busy-kernel UX + attachments), `stateless` always runs the
+  runner. Without the patch the plugin degrades to additive mode.
+
+### 11.3 Surface & commands
+
+- Config `ompr.toml [kernel]`: `backend`, `timeoutMs`, `maxOutputChars`,
+  `guidance`.
+- `/kernel` status + stats; `/kernel auto|stateless|stateful` hot-swaps the
+  backend live (per-session; reload resets to config); `/kernel reset` clears
+  stats. Stats journal: `~/.local/state/ompa/kernel-pilot.jsonl`.
+- Guidance injected per turn when backend ≠ stateful: prefer `py` for pure
+  computation, reserve `ipython` for stateful work.
+- CLI: `ompa kernel-pilot patch|unpatch|status` (patch is idempotent; `--remove`
+  reverts; backup `agent-session.js.orig-ompa`).
+
+Invariants: the runner never starts the kernel; a stateless call can never
+hang the session (timeout + SIGKILL + abort wiring, invariant #21); stateful
+calls are bit-for-bit the built-in path (delegation, not reimplementation).
+
+---
+
+## 12. CLI contract (ompa)
 
 ```
 ompa install            link enabled plugins (from ompr.toml §plugins)
@@ -562,15 +619,17 @@ ompa reap               kill idle omp/pi background workers (auto-cleanup)
 ompa enable-reap        wire the 5-min systemd user timer (auto; also on install)
 ompa completions        install shell completions (fish; auto-run on install)
 ompa refine-prime       gate /refine prime-modification access (enable|disable|status; §10)
+ompa kernel-pilot       hot-swap ipython backends (patch|unpatch|status; §11)
 ompa --version          print version
 ```
-In-TUI commands (from the §8/§9 plugins): `/dashboard` (alias `/ompa`),
-`ctrl+alt+o` toggle, `/ompa widget on|off`, `/profile`, `/profile reset`.
+In-TUI commands (from the §8/§9/§11 plugins): `/dashboard` (alias `/ompa`),
+`ctrl+alt+o` toggle, `/ompa widget on|off`, `/profile`, `/profile reset`,
+`/kernel auto|stateless|stateful`, `/kernel status`, `/kernel reset`.
 Exit codes: 0 ok, 1 user error, 2 unknown plugin/theme.
 
 ---
 
-## 12. Invariants (regression guards)
+## 13. Invariants (regression guards)
 
 1. The guard never blocks a tool call longer than `maxHoldMs`.
 2. `:name:` parsing uses `indexOf(":", 1)`; never bare `split(":")`.
@@ -608,16 +667,23 @@ Exit codes: 0 ok, 1 user error, 2 unknown plugin/theme.
 19. The self-profiler never breaks the session: all reads/writes are
     best-effort, the event log is capped/rotated, and distill is deterministic
     (no LLM call).
+20. The kernel-pilot runner never starts the stateful kernel: stateless calls
+    run in a fresh subprocess with timeout + SIGKILL + abort wiring; a
+    stateless call can never hang or poison the session.
+21. Stateful ipython calls always delegate to the base tool (real provisioner
+    + RLM bridge + snapshots + attachments) — the router reimplements nothing,
+    so the stateful path is bit-for-bit the built-in behavior.
 
 ---
 
-## 13. Milestone mapping
+## 14. Milestone mapping
 
 | Milestone | Build contract | Done? |
 |-----------|---------------|-------|
 | M1 framework | repo, CLI, config, 5 plugins, 2 themes, license, CI | ✅ |
 | M2 souls+fleet-v1 | vault + commands + injection + auto-capture; backend eval; fleet cap/queue + proactive reaping | ⏳ |
 | M2.5 tui+profile+prime | modular dashboard (§8) + self-profiler (§9) + refine prime access (§10) | ✅ this session |
+| M2.6 kernel-pilot | hot-swappable execution backends: stateless `py` runner + ipython router (auto/stateless/stateful) + prompt guidance (§11) | ✅ this session |
 | M3 sitter+fleet-v2 | §6 telemetry + ladder + loop; telemetry history; theme previews; fleet offload-on-wait + focus-dormant TUIs + tab-flash notify | — |
 | M4 one-command | fresh-machine installer; multi-harness (gated) | — |
 | M5 launch | OSS release; product tier separation (free core / paid sitter) | — |

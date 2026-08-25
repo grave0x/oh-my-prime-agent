@@ -95,7 +95,13 @@ state is unused. Also the natural runner for skills that are pure functions.
 
 **Cost/benefit:** medium cost (bootstrap venv, rlimit wrapper, skill shims).
 High benefit — this is the single biggest memory win on the measured surface.
-**Verdict: build.** Priority: high, after Idea 1 (shares the wrapper).
+**Verdict: build — DONE (v1).** Priority: high. Shipped as the `kernel-pilot`
+plugin (SPEC-DETAIL §11): additive `py` stateless tool + hot-swappable
+`ipython` router (`auto` classifies per call: rlm/skills/magics/await →
+kernel; pure → runner; `/kernel auto|stateless|stateful` swaps live). The
+runner uses the kernel venv, nice 19, timeout, output caps, and echoes the
+last top-level expression notebook-style. A per-call spawn costs 40–80 ms
+cold; a warmed worker pool is the natural v2.
 
 ---
 
@@ -193,7 +199,9 @@ stateful kernel (and its RSS).
 **Cost/benefit:** medium cost, high benefit — it is the *test harness* for
 refine itself plus a memory win. **Verdict: build the runner as the refine
 validation backend first** (smallest scope), then generalize to skills.
-Priority: medium-high.
+Priority: medium-high. The kernel-pilot `py` runner is the first slice of
+this — stateless, venv-scoped, call-serializable; wiring it as the /refine
+skill-test bed is a small follow-up.
 
 ---
 
@@ -261,8 +269,8 @@ kernel. Priority: low-medium.
 | idea | cost | benefit | fits ompa thin? | verdict |
 |---|---|---|---|---|
 | 1 bash-sandbox | low | high (isolation for the 80% single-shot case) | yes | build (mode of bash tool) |
-| 2 py-runner | medium | high (biggest memory win: stateless pure functions) | yes | build |
-| 5 skill mini-kernel | medium | high (refine validation backend + memory win) | yes | build as refine testbed first |
+| 2 py-runner | medium | high (biggest memory win: stateless pure functions) | yes | **built (v1): kernel-pilot plugin** |
+| 5 skill mini-kernel | medium | high (refine validation backend + memory win) | yes | build as refine testbed first (kernel-pilot runner is slice 1) |
 | 3 jq/sqlite query | low | moderate | yes | document one-liners, no kernel |
 | 7 fetch-runner | low | moderate | yes | fold into mini-kernel |
 | 6 ticker | low-med | high (sitter) | yes | defer to M3 sitter |
@@ -270,10 +278,10 @@ kernel. Priority: low-medium.
 
 ## The one-liner
 
-Two kernels earn their place now: **bash-sandbox** (hard isolation for
-single-shot shell) and **py-runner** (stateless pure functions that stop
-justifying a resident 500 MB kernel). Everything else is either a mode of
-those two or waits for the sitter. The cheapest win on this box is not a new
-kernel at all — it is the **skill mini-kernel as the /refine validation
-backend**, because it turns every refinement into a runnable test instead of a
-hope.
+**py-runner is built** (kernel-pilot plugin, v1: stateless `py` tool +
+hot-swappable `ipython` router). Next up: **bash-sandbox** (hard isolation
+for single-shot shell) and the **skill mini-kernel as the /refine validation
+backend** (kernel-pilot's runner is slice 1). Everything else is either a mode
+of those two or waits for the sitter. The cheapest win left on this box is
+the /refine validation backend, because it turns every refinement into a
+runnable test instead of a hope.
