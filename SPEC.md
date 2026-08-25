@@ -147,7 +147,7 @@ host-health is the thin core. Everything else is an opt-in plugin.
   previews.
 - M4: one-command install on a fresh machine; multi-harness targets (Claude
   Code, Codex) gated behind demand.
-- M5: public release (OSS) — decide A/B/C at M3, not now.
+- M5: public release (OSS) — the distribution channel; direction decided (product).
 
 ## Direction: PRODUCT (decided)
 
