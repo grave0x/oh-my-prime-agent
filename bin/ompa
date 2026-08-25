@@ -95,6 +95,29 @@ cmd_version() {
   printf 'ompa v%s\n' "$v"
 }
 
+cmd_prune() {
+  # remove souls whose session is no longer live; protect reserved identities
+  local RESERVED="reaper crypt shovel"
+  local live_ids
+  live_ids=$(prime-agent list --json 2>/dev/null | grep -oE '"sessionId": "[^"]+"|"id": "[a-f0-9]{12}"' | sed 's/.*: "//;s/"//')
+  local n=0
+  for f in "$HOME/.prime/agent/souls"/*.soul.md; do
+    [[ -f "$f" ]] || continue
+    local name
+    name=$(basename "$f" .soul.md)
+    if echo "$RESERVED" | grep -qw "$name"; then continue; fi
+    local sid
+    sid=$(grep -m1 -E '^(session|session_id|sessionId):' "$f" | sed 's/^[^:]*: *//')
+    [[ -z "$sid" ]] && continue
+    if ! echo "$live_ids" | grep -qx "$sid"; then
+      rm -f "$f" "$HOME/.prime/agent/souls/$name.memory.jsonl"
+      say "pruned dead soul: $name"
+      n=$((n+1))
+    fi
+  done
+  say "prune done ($n removed)"
+}
+
 cmd_help() {
   cat <<EOF
 ompa — oh-my-prime-agent (alias form)
@@ -105,6 +128,7 @@ ompa — oh-my-prime-agent (alias form)
   ompa theme <name>     apply a theme (cp2077 | rebecca)
   ompa status           show state
   ompa version         print version
+  ompa prune           remove souls whose sessions are dead
   ompa help
 
 Config: $CONF
@@ -113,6 +137,7 @@ EOF
 
 case "${1:-help}" in
   install) cmd_install ;;
+  prune) cmd_prune ;;
   enable) cmd_enable "${2:-}" ;;
   disable) cmd_disable "${2:-}" ;;
   theme) cmd_theme "${2:-}" ;;
