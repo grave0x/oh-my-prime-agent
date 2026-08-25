@@ -49,6 +49,8 @@ interface Policy {
   ioClass: number;
   /** max parallel jobs to inject (-j N) for build tools */
   maxJobs: number;
+  /** per-project overrides keyed by cwd prefix (longest match wins) */
+  perProject?: Record<string, Partial<Policy>>;
 }
 
 const DEFAULT_POLICY: Policy = {
@@ -66,6 +68,11 @@ const DEFAULT_POLICY: Policy = {
   niceLevel: 19,
   ioClass: 3,
   maxJobs: 4,
+  perProject: {
+    // Moonshell: Bevy crates are huge single compile units; -j2 avoids the OOM
+    // observed at default parallelism. Keys are cwd prefixes.
+    "/home/grave/Projects/Moonshell": { maxJobs: 2 },
+  },
 };
 
 function ensurePolicy(): Policy {
@@ -80,6 +87,16 @@ function ensurePolicy(): Policy {
   } catch {
     return { ...DEFAULT_POLICY };
   }
+}
+
+function effectivePolicy(base: Policy, cwd: string): Policy {
+  if (!base.perProject || !cwd) return base;
+  let best: Partial<Policy> | undefined;
+  let bestLen = -1;
+  for (const [prefix, over] of Object.entries(base.perProject)) {
+    if (cwd.startsWith(prefix) && prefix.length > bestLen) { best = over; bestLen = prefix.length; }
+  }
+  return best ? { ...base, ...best } : base;
 }
 
 function systemStats(): { load1: number; memAvailMB: number; swapUsedMB: number } {
@@ -156,6 +173,8 @@ export default function resourceGuard(pi: ExtensionAPI): void {
   pi.on("tool_call", async (event: any, ctx: any) => {
     const toolName = event.toolName;
     if (!p.tools.includes(toolName)) return undefined;
+    const cwd: string = ctx?.cwd || ctx?.sessionManager?.getCwd?.() || "";
+    const eff = effectivePolicy(p, cwd);
 
     const text = toolName === "bash"
       ? (event.input?.command || "")
@@ -165,20 +184,20 @@ export default function resourceGuard(pi: ExtensionAPI): void {
     let heldFor = 0;
     const started = Date.now();
     let held = false;
-    while (pressured(p)) {
+    while (pressured(eff)) {
       held = true;
       record("held", toolName, { snippet: text.slice(0, 120) });
       try { ctx.ui.notify(`Resource guard: holding ${toolName} (load ${systemStats().load1.toFixed(1)})…`, "info"); } catch { /* no UI */ }
-      await sleep(p.pollMs);
-      heldFor += p.pollMs;
-      if (heldFor >= p.maxHoldMs) break;
+      await sleep(eff.pollMs);
+      heldFor += eff.pollMs;
+      if (heldFor >= eff.maxHoldMs) break;
     }
 
     // throttle before execution
     if (toolName === "bash" && event.input?.command) {
       let cmd = event.input.command;
-      cmd = injectJobs(cmd, p);
-      cmd = throttleShell(cmd, p);
+      cmd = injectJobs(cmd, eff);
+      cmd = throttleShell(cmd, eff);
       event.input.command = cmd;
     } else if (toolName === "ipython" && event.input?.code) {
       // wrap spawned processes via env; best-effort: mark code with a note
