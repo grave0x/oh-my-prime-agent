@@ -97,3 +97,20 @@ The north star, in order of ambition:
 - **SPEC.md** — the contract: what, why, the Houseguest Rules, boundaries.
 - **this file** — the direction: aspirations, implementation order, tooling.
 - Milestones map to git tags (`v0.1.0` = M1 shipped).
+
+
+## M2 progress (this session)
+
+- **souls plugin shipped**: per-soul memory vault (`~/.prime/agent/souls/<name>.memory.jsonl`),
+  `/remember` `/recall` `/forget`, 500-fact cap, durable across sessions.
+- **Per-turn injection**: relevant facts (keyword hits + recent) appended to the
+  system prompt via `before_agent_start` (proven path).
+- **Auto-capture**: `agent_end` records "Worked on: …" facts when the prompt used
+  tools, for claimed souls only, deduped — the vault fills itself.
+- **Fix**: soul identity injection switched from `context`+`unshift` to
+  `before_agent_start`+`systemPrompt` chaining (the delivery-reliable path).
+- **Registry hygiene**: dead test souls removed; crypt/shovel restored as
+  reserved identity records.
+
+Remaining M2: memory vault eval (mem0/mempalace vs own — decision deferred in
+SPEC), project-familiarity→memory cross-links, `/recall` UI polish.

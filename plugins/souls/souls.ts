@@ -119,6 +119,32 @@ export default function souls(pi: ExtensionAPI): void {
     } catch { return undefined; }
   });
 
+
+  // ---- auto-capture: record notable work at prompt end (claimed souls only) ----
+  pi.on("agent_end", async (event: any, ctx: any) => {
+    try {
+      const sid = ctx.sessionManager?.getSessionId?.() ?? "";
+      const name = mySoulName(sid);
+      if (name === "agent") return; // unclaimed/test sessions stay quiet
+      const msgs: any[] = Array.isArray(event.messages) ? event.messages : [];
+      const userMsg = msgs.find((m: any) => m.role === "user");
+      if (!userMsg) return;
+      const content = userMsg.content;
+      let promptText = "";
+      if (typeof content === "string") promptText = content;
+      else if (Array.isArray(content)) promptText = content.map((c: any) => c?.text || "").join(" ");
+      promptText = promptText.replace(/\s+/g, " ").trim();
+      if (promptText.length < 15) return;
+      const usedTools = msgs.some((m: any) =>
+        Array.isArray(m.content) && m.content.some((c: any) => c?.type === "tool_use"));
+      if (!usedTools) return; // smalltalk or pure answers are not vault material
+      const topic = promptText.slice(0, 90);
+      const facts = readFacts(name);
+      if (facts.slice(-5).some((f) => f.content.includes(topic.slice(0, 30)))) return; // dedupe
+      remember(name, `Worked on: ${topic}`, "auto");
+    } catch { /* never break the loop */ }
+  });
+
   pi.registerCommand("remember", {
     description: "Store a durable fact in this soul's memory vault.",
     handler: async (args: string, ctx: ExtensionCommandContext) => {
