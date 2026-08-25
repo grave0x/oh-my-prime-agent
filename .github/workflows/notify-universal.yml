@@ -1,0 +1,25 @@
+name: Notify universal-pkg-repo
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch release-published
+        env:
+          TOKEN: ${{ secrets.GRAVE_INC_UNIVERSAL_TOKEN }}
+        run: |
+          if [ -z "${TOKEN:-}" ]; then
+            echo "::warning::GRAVE_INC_UNIVERSAL_TOKEN not set on ${{ github.repository }} — package repo will catch up on its weekly sync."
+            exit 0
+          fi
+          curl -fsS -X POST \
+            -H "Authorization: Bearer ${TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            -d '{"event_type":"release-published"}' \
+            "https://api.github.com/repos/Grave-Inc/universal-pkg-repo/dispatches"
