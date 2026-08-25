@@ -5,6 +5,8 @@
 > nobody else is asking: *what does it feel like when the agent runs on your
 > machine?* — and builds the layer that makes the agent a good citizen.
 
+> **Implementation contract:** [SPEC-DETAIL.md](SPEC-DETAIL.md) — schemas, algorithms, thresholds, invariants.
+
 ## Pitch (one line)
 
 ECC and superpowers optimize the agent. Ruflo federates the agents.
