@@ -54,6 +54,10 @@ cmd_install() {
   if ! grep -q 'alias ompa=' "$HOME/.bashrc" 2>/dev/null; then
     say 'add to your shell: alias ompa='"'"'$HOME/.prime/oh-my-prime-agent/bin/ompa'"'"''
   fi
+  # auto-configure shell completions (auto config of auto completions)
+  if command -v fish >/dev/null 2>&1; then
+    cmd_completions fish
+  fi
   say "done. /reload in the TUI to activate."
 }
 
@@ -125,6 +129,22 @@ cmd_prune() {
   say "prune done ($n removed)"
 }
 
+cmd_completions() {
+  local shell="${1:-fish}"
+  case "$shell" in
+    fish)
+      mkdir -p "$HOME/.config/fish/completions"
+      cp "$ROOT/completions/ompa.fish" "$HOME/.config/fish/completions/ompa.fish"
+      cp "$ROOT/completions/omp.fish"  "$HOME/.config/fish/completions/omp.fish"
+      say "fish completions installed: ~/.config/fish/completions/{ompa,omp}.fish"
+      ;;
+    *)
+      err "unsupported shell: $shell (fish only for now)"
+      return 1
+      ;;
+  esac
+}
+
 cmd_help() {
   cat <<EOF
 ompa — oh-my-prime-agent (alias form)
@@ -136,6 +156,7 @@ ompa — oh-my-prime-agent (alias form)
   ompa status           show state
   ompa version         print version
   ompa prune           remove souls whose sessions are dead
+  ompa completions     install shell completions (fish, auto-run on install)
   ompa help
 
 Config: $CONF
@@ -150,6 +171,7 @@ case "${1:-help}" in
   theme) cmd_theme "${2:-}" ;;
   status) cmd_status ;;
   version|--version|-V) cmd_version ;;
+  completions) cmd_completions "${2:-fish}" ;;
   help|--help|-h) cmd_help ;;
   *) cmd_help ;;
 esac

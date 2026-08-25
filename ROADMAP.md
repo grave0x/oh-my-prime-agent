@@ -63,6 +63,15 @@ The north star, in order of ambition:
   then checkpoint + release memory, restore on wake), focus-dormant TUIs
   (unbounded count only when the renderer sleeps unfocused), and tab-flash
   notifications from real agents in the soul's high-contrast accent.
+- **Deep-optimization pass (measured)** — surfaces measured on grave's box
+  (48 resident agent procs ≈ 2.8 GB RSS + 2.6 GB swap; 934 MB artifact
+  litter; dual governor config; per-turn injection cost; unbounded state
+  logs; 11 GB / 15 GB zram) with ompr targets: idle-worker offload,
+  omp-worker idle shutdown + governance, `ompa gc` hygiene, `ompa sync`
+  single-source config, injection rate-limit. Full map: OPTIMIZE.md.
+- **Auto shell completions** — `ompa install` auto-configures fish
+  completions for `ompa` + `omp` (repo is the source, installed copy is
+  regenerated; `ompa completions fish` to reinstall).
 - **Refine revenue/packaging** — direction is decided (product; see SPEC.md §Direction). Exact pricing and packaging land with a working M2.
 
 ### Longer-term (M4–M5) — distribution

@@ -12,7 +12,7 @@
 ~/.prime/oh-my-prime-agent/        repo (git)
 ├── bin/ompa                       CLI (bash)
 ├── ompr.toml                      single source of config
-├── SPEC.md / SPEC-DETAIL.md / ROADMAP.md
+├── SPEC.md / SPEC-DETAIL.md / ROADMAP.md / OPTIMIZE.md
 ├── plugins/<name>/                each plugin = dir of .ts + optional assets
 │   ├── resource-guard/
 │   ├── global-chat/
@@ -20,6 +20,7 @@
 │   ├── notif-box/
 │   ├── bash-first/
 │   └── fleet/
+├── completions/                   shell completions (ompa.fish, omp.fish)
 └── themes/<name>/                 kitty-tab-bar.py + soul-accents + hypr rules
 
 ~/.prime/agent/extensions/         symlink targets (ompa install)
@@ -30,12 +31,21 @@
 ~/.local/state/fleet/runs.jsonl      # subagent run log (spawn → reap)
 ~/.local/state/fleet/queue.json      # capped-spawn wait queue
 ~/.local/state/fleet/checkpoints/    # offloaded-wait checkpoints
+~/.prime/agent/resource-policy.json  # GOVERNED: written by `ompa sync` (never hand-edited)
 ```
+
+**Optimization contract:** measured surfaces + targets live in
+[OPTIMIZE.md](OPTIMIZE.md). If a knob exists in ompr.toml but has no surface
+behind it, it's premature. If a surface exists but has no knob, it's a gap.
 
 **Install contract:** `ompa install` symlinks each enabled plugin's `*.ts` into
 `~/.prime/agent/extensions/` (prime-agent auto-discovers). Enabling/disabling =
 create/remove symlink. Themes copy into `~/.config/kitty/` and
-`~/.config/hypr/custom/` (Lua API on this box — see §5).
+`~/.config/hypr/custom/` (Lua API on this box — see §5). **Completions:**
+`ompa install` (and `ompa completions fish`) auto-copies
+`completions/{ompa,omp}.fish` into `~/.config/fish/completions/` — auto
+config of auto completions; the repo is the source, the installed copy is
+regenerated, never hand-edited.
 
 **Config precedence:** defaults (code) < `ompr.toml` < env `OMPA_*` < CLI flag.
 `ompr.toml` is written by `ompa install` on first run if missing.
@@ -117,6 +127,22 @@ Tool choice: bash for shell/text/file ops; ipython only for logic/state.
 ```
 The bash-first plugin provides the tool-choice line independently so it can be
 enabled/disabled alone.
+
+### 1.7 omp-internal workers (`governOmpWorkers=true`)
+
+The governor's detection is not limited to the bash/ipython tool calls — it
+also covers omp's own resident workers: `__omp_worker_tiny_inference`,
+`__omp_worker_mnemopi_embed`, `__omp_worker_stt`/`tts`, `__omp_worker_tab`.
+Same treatment: when pressured, heavy workers are held/reniced (nice 19,
+ionice 3); idle ones are shut down per `[inference] idleTimeoutMs` and
+respawned on demand (OPTIMIZE.md Surface 2).
+
+### 1.8 Injection rate-limit (`[inject] rateLimitTurns`)
+
+`[Resource context]` is re-injected only when the pressure state changed or
+`rateLimitTurns` (default 10) turns elapsed — never re-stating an unchanged
+load line every turn (OPTIMIZE.md Surface 5). Soul blocks keep their own
+caps (§2.5). Identical blocks across turns are deduped, not re-appended.
 
 ---
 
@@ -359,6 +385,25 @@ focusDormant  = true      # prerequisite gate for unbounded TUIs (§7.3)
 reapGraceMs   = 60000
 ```
 
+### 7.7 Hygiene GC (`[hygiene]`, native tick)
+
+Houseguest rule #3 for the fleet's litter (OPTIMIZE.md Surface 3):
+
+- On each governor tick (30 s), `ompa gc` removes session artifacts +
+  transcripts of **dead** sessions older than `artifactMaxAgeDays` (14
+  default). Live sessions are never touched.
+- State files (`usage.jsonl`, `chat.jsonl`, `notif.log`, `runs.jsonl`) rotate
+  at `logMaxMB` (8 default): append → drop oldest half. Bounded, forever.
+- `runGcOnTick=true` makes it native — no manual cleanup command required.
+
+### 7.8 omp background workers (`[inference]`)
+
+- Workers (`tiny_inference`, `mnemopi_embed`, `tab`, `stt`/`tts`, broker)
+  idle > `idleTimeoutMs` (120 s) are shut down and respawned on demand.
+- When `governOmpWorkers=true` (§1.7), active heavy workers are held/reniced
+  under pressure instead of stacking on top of builds (Surface 8: rustc 2.4 GB
+  + inference 1.6 GB collide).
+
 ---
 
 ## 8. CLI contract (ompa)
@@ -372,6 +417,9 @@ ompa prune              remove souls whose sessions are dead (reserved safe)
 ompa status             plugins on/off, theme, souls
 ompa fleet              fleet governor: running X/15, queued Y, offloaded Z
 ompa fleet reap --all   force-reap finished subagents (zombie guard bypass)
+ompa sync               write resource-policy.json from ompr.toml (single source)
+ompa gc                 run hygiene GC now (artifacts/transcripts > maxAgeDays)
+ompa completions        install shell completions (fish; auto-run on install)
 ompa --version          print version
 ```
 Exit codes: 0 ok, 1 user error, 2 unknown plugin/theme.
@@ -400,6 +448,13 @@ Exit codes: 0 ok, 1 user error, 2 unknown plugin/theme.
     < 0.1% (10s window), else TUIs fall back to a fixed cap.
 13. Fleet checkpoint writes are atomic (temp + rename); restore replays
     idempotently.
+14. **Single source of truth:** `resource-policy.json` is written by
+    `ompa sync` from ompr.toml — it is never hand-edited, so the governor
+    prime reads and the governor ompa tunes can never drift.
+15. Injection is rate-limited: an unchanged `[Resource context]` is not
+    re-appended within `rateLimitTurns`; identical blocks are deduped.
+16. `ompa gc` / hygiene only ever touches dead sessions' artifacts — live
+    sessions are never reaped or truncated.
 
 ---
 
