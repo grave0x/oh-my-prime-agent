@@ -185,7 +185,7 @@ const WATCH_DEFAULTS: WatchConfig = {
     {
       name: "pi",
       local: "~/Projects/04-llm/pi-modded",
-      repo: "grave0x/oh-my-prime-agent", // grave0x/pi has issues disabled
+      repo: "grave0x/pi",
       upstream: "earendil-works/pi",
       branch: "main",
       npm: "@earendil-works/pi-coding-agent",
